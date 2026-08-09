@@ -79,7 +79,7 @@ public sealed class ClassTests
         var objectClass = state.EnsureClassObject("Ljava/lang/Object;");
         Assert.Equal(1, Invoke(registry, state, ClassClass, "isInstance", "(Ljava/lang/Object;)Z", AndroidInvokeKind.Virtual, fooClass, new DexObject("Lc/Foo;")));
         Assert.Equal(0, Invoke(registry, state, ClassClass, "isInstance", "(Ljava/lang/Object;)Z", AndroidInvokeKind.Virtual, fooClass, new DexObject("Lc/Color;")));
-        Assert.Equal(0, Invoke(registry, state, ClassClass, "isInstance", "(Ljava/lang/Object;)Z", AndroidInvokeKind.Virtual, fooClass, null));
+        Assert.Equal(0, Invoke(registry, state, ClassClass, "isInstance", "(Ljava/lang/Object;)Z", AndroidInvokeKind.Virtual, fooClass, null!));
         Assert.Equal(1, Invoke(registry, state, ClassClass, "isAssignableFrom", "(Ljava/lang/Class;)Z", AndroidInvokeKind.Virtual, objectClass, fooClass));
         Assert.Equal(0, Invoke(registry, state, ClassClass, "isAssignableFrom", "(Ljava/lang/Class;)Z", AndroidInvokeKind.Virtual, fooClass, objectClass));
     }

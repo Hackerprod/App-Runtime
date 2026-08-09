@@ -79,7 +79,7 @@ public static class AndroidApiBindings
 		});
 		RegisterLogs(builder, state, logSink);
 		RegisterText(builder, state);
-		RegisterStrings(builder, state);
+		JavaLangStringBindings.Register(builder, state);
 		RegisterStringBuilder(builder, state);
 		RegisterColor(builder);
 		RegisterSystemClock(builder, state);
@@ -516,26 +516,6 @@ public static class AndroidApiBindings
 		builder.Register(Api("Landroid/text/TextUtils;", "getTrimmedLength", "(Ljava/lang/CharSequence;)I"), (AndroidApiInvocation _, object[] args) => JavaTrim(AsText(state, args[0]) ?? throw new AndroidApiNullReferenceException("TextUtils.getTrimmedLength receiver is null.")).Length);
 	}
 
-	private static void RegisterStrings(AndroidApiRegistryBuilder builder, AndroidFrameworkState state)
-	{
-		builder.Register(Api("Ljava/lang/String;", "length", "()I"), (AndroidApiInvocation _, object[] args) => RequireString(args[0]).Length);
-		builder.Register(Api("Ljava/lang/String;", "isEmpty", "()Z"), (AndroidApiInvocation _, object[] args) => (RequireString(args[0]).Length == 0) ? 1 : 0);
-		builder.Register(Api("Ljava/lang/String;", "equals", "(Ljava/lang/Object;)Z"), (AndroidApiInvocation _, object[] args) => (args[1] is string b && string.Equals(RequireString(args[0]), b, StringComparison.Ordinal)) ? 1 : 0);
-		builder.Register(Api("Ljava/lang/String;", "equalsIgnoreCase", "(Ljava/lang/String;)Z"), (AndroidApiInvocation _, object[] args) => (args[1] is string right && JavaEqualsIgnoreCase(RequireString(args[0]), right)) ? 1 : 0);
-		builder.Register(Api("Ljava/lang/String;", "startsWith", "(Ljava/lang/String;)Z"), (AndroidApiInvocation _, object[] args) => RequireString(args[0]).StartsWith(RequireString(args[1]), StringComparison.Ordinal) ? 1 : 0);
-		builder.Register(Api("Ljava/lang/String;", "endsWith", "(Ljava/lang/String;)Z"), (AndroidApiInvocation _, object[] args) => RequireString(args[0]).EndsWith(RequireString(args[1]), StringComparison.Ordinal) ? 1 : 0);
-		builder.Register(Api("Ljava/lang/String;", "contains", "(Ljava/lang/CharSequence;)Z"), (AndroidApiInvocation _, object[] args) => RequireString(args[0]).Contains(AsText(state, args[1]) ?? throw new ArgumentException("String.contains argument is null."), StringComparison.Ordinal) ? 1 : 0);
-		builder.Register(Api("Ljava/lang/String;", "indexOf", "(Ljava/lang/String;)I"), (AndroidApiInvocation _, object[] args) => RequireString(args[0]).IndexOf(RequireString(args[1]), StringComparison.Ordinal));
-		builder.Register(Api("Ljava/lang/String;", "indexOf", "(Ljava/lang/String;I)I"), (AndroidApiInvocation _, object[] args) => JavaIndexOf(RequireString(args[0]), RequireString(args[1]), RequireInt(args[2])));
-		builder.Register(Api("Ljava/lang/String;", "concat", "(Ljava/lang/String;)Ljava/lang/String;"), (AndroidApiInvocation _, object[] args) => RequireString(args[0]) + RequireString(args[1]));
-		builder.Register(Api("Ljava/lang/String;", "trim", "()Ljava/lang/String;"), (AndroidApiInvocation _, object[] args) => JavaTrim(RequireString(args[0])));
-		builder.Register(Api("Ljava/lang/String;", "toString", "()Ljava/lang/String;"), (AndroidApiInvocation _, object[] args) => RequireString(args[0]));
-		builder.Register(Api("Ljava/lang/String;", "hashCode", "()I"), (AndroidApiInvocation _, object[] args) => JavaHash(RequireString(args[0])));
-		builder.Register(Api("Ljava/lang/String;", "valueOf", "(I)Ljava/lang/String;"), (AndroidApiInvocation _, object[] args) => RequireInt(args[0]).ToString(CultureInfo.InvariantCulture));
-		builder.Register(Api("Ljava/lang/String;", "valueOf", "(Z)Ljava/lang/String;"), (AndroidApiInvocation _, object[] args) => (RequireInt(args[0]) == 0) ? "false" : "true");
-		builder.Register(Api("Ljava/lang/String;", "valueOf", "(C)Ljava/lang/String;"), (AndroidApiInvocation _, object[] args) => ((char)RequireInt(args[0])).ToString());
-	}
-
 	private static void RegisterStringBuilder(AndroidApiRegistryBuilder builder, AndroidFrameworkState state)
 	{
 		builder.Register(Api("Ljava/lang/StringBuilder;", "<init>", "()V"), delegate(AndroidApiInvocation _, object[] args)
@@ -892,7 +872,7 @@ public static class AndroidApiBindings
 		return result;
 	}
 
-	private static string AsText(AndroidFrameworkState state, object value)
+	internal static string AsText(AndroidFrameworkState state, object value)
 	{
 		if (1 == 0)
 		{
@@ -943,7 +923,7 @@ public static class AndroidApiBindings
 		return state.Ui ?? throw new AndroidApiUnavailableException(new AndroidApiMethodId("Landroid/app/Activity;", "setContentView", "(I)V"), "APK resource/UI session is unavailable.");
 	}
 
-	private static string RequireString(object value, bool allowNull = false)
+	internal static string RequireString(object value, bool allowNull = false)
 	{
 		object obj = value as string;
 		if (obj == null)
@@ -957,7 +937,7 @@ public static class AndroidApiBindings
 		return (string)obj;
 	}
 
-	private static int RequireInt(object value)
+	internal static int RequireInt(object value)
 	{
 		if (1 == 0)
 		{
@@ -988,7 +968,7 @@ public static class AndroidApiBindings
 		return result;
 	}
 
-	private static long RequireLong(object value)
+	internal static long RequireLong(object value)
 	{
 		if (value is long)
 		{
@@ -997,7 +977,7 @@ public static class AndroidApiBindings
 		throw new ArgumentException("Expected long value.");
 	}
 
-	private static int JavaHash(string value)
+	internal static int JavaHash(string value)
 	{
 		int hash = 0;
 		foreach (char c in value)
@@ -1007,7 +987,7 @@ public static class AndroidApiBindings
 		return hash;
 	}
 
-	private static bool JavaEqualsIgnoreCase(string left, string right)
+	internal static bool JavaEqualsIgnoreCase(string left, string right)
 	{
 		if (left.Length != right.Length)
 		{
@@ -1032,7 +1012,7 @@ public static class AndroidApiBindings
 		return leftIndex == left.Length && rightIndex == right.Length;
 	}
 
-	private static int ReadJavaCodePoint(string value, ref int index)
+	internal static int ReadJavaCodePoint(string value, ref int index)
 	{
 		char first = value[index++];
 		if (char.IsHighSurrogate(first) && index < value.Length && char.IsLowSurrogate(value[index]))
@@ -1042,7 +1022,7 @@ public static class AndroidApiBindings
 		return first;
 	}
 
-	private static int JavaUpper(int value)
+	internal static int JavaUpper(int value)
 	{
 		if (1 == 0)
 		{
@@ -1092,7 +1072,7 @@ public static class AndroidApiBindings
 		return result;
 	}
 
-	private static int JavaLower(int value)
+	internal static int JavaLower(int value)
 	{
 		if (1 == 0)
 		{
@@ -1142,7 +1122,7 @@ public static class AndroidApiBindings
 		return result;
 	}
 
-	private static string JavaTrim(string value)
+	internal static string JavaTrim(string value)
 	{
 		int start = 0;
 		int end;
@@ -1157,7 +1137,7 @@ public static class AndroidApiBindings
 		return value.Substring(num, end - num);
 	}
 
-	private static int JavaIndexOf(string value, string search, int from)
+	internal static int JavaIndexOf(string value, string search, int from)
 	{
 		return value.IndexOf(search, Math.Clamp(from, 0, value.Length), StringComparison.Ordinal);
 	}

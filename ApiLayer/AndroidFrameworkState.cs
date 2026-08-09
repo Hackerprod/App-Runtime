@@ -819,6 +819,7 @@ internal static class AndroidFrameworkHierarchy
         ["Ljava/lang/SecurityException;"] = "Ljava/lang/RuntimeException;",
         ["Ljava/lang/IndexOutOfBoundsException;"] = "Ljava/lang/RuntimeException;",
         ["Ljava/lang/ArrayIndexOutOfBoundsException;"] = "Ljava/lang/IndexOutOfBoundsException;",
+        ["Ljava/lang/StringIndexOutOfBoundsException;"] = "Ljava/lang/IndexOutOfBoundsException;",
         ["Ljava/lang/NegativeArraySizeException;"] = "Ljava/lang/RuntimeException;",
         ["Ljava/util/NoSuchElementException;"] = "Ljava/lang/RuntimeException;",
         ["Ljava/lang/InterruptedException;"] = "Ljava/lang/Exception;",
