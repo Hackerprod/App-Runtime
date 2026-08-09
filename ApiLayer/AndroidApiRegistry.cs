@@ -386,6 +386,8 @@ public sealed class AndroidApiRegistry
         if (api.ClassDescriptor == "Lkotlin/collections/ArraysKt;" && api.MethodName == "toMutableList") return true;
         // Kotlin top-level extension functions on CollectionsKt are static calls.
         if (api.ClassDescriptor == "Lkotlin/collections/CollectionsKt;" && api.MethodName == "sort") return true;
+        // java.util.Arrays is a static utility class.
+        if (api.ClassDescriptor == "Ljava/util/Arrays;" && api.MethodName == "copyOf") return true;
         // Class.forName is static; the blanket instance default below would otherwise
         // misreport a genuine static call as a shape mismatch instead of the honest
         // unimplemented boundary.
