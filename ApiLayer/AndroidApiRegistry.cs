@@ -390,6 +390,8 @@ public sealed class AndroidApiRegistry
         if (api.ClassDescriptor == "Ljava/util/Arrays;" && api.MethodName == "copyOf") return true;
         // java.lang.Math is a static utility class.
         if (api.ClassDescriptor == "Ljava/lang/Math;") return true;
+        // Runtime.getRuntime() is static; the informational methods are instance.
+        if (api.ClassDescriptor == "Ljava/lang/Runtime;" && api.MethodName == "getRuntime") return true;
         // Class.forName is static; the blanket instance default below would otherwise
         // misreport a genuine static call as a shape mismatch instead of the honest
         // unimplemented boundary.
@@ -401,9 +403,14 @@ public sealed class AndroidApiRegistry
             // by having parameters, unlike the () instance accessors).
             if (api.MethodName is "valueOf" or "parseBoolean" or "parseInt" or "parseLong" or "parseShort" or "parseByte" or "parseDouble" or "parseFloat") return true;
             if (api.MethodName is "toString" or "hashCode" or "compare" && api.MethodDescriptor.Length > 2 && api.MethodDescriptor[1] != ')') return true;
+            // Real static bit-manipulation/format methods (deferred from the
+            // boxing boundary but genuinely static — the shape classifier must
+            // report them as honest unimplemented boundaries, not a shape
+            // mismatch, when a real run reaches them).
+            if (api.MethodName is "highestOneBit" or "lowestOneBit" or "numberOfLeadingZeros" or "numberOfTrailingZeros" or "bitCount" or "rotateLeft" or "rotateRight" or "signum" or "reverse" or "reverseBytes" or "toBinaryString" or "toHexString" or "toOctalString" or "toUnsignedString" or "toUnsignedLong" or "divideUnsigned" or "remainderUnsigned") return true;
             return false;
         }
-        if (api.ClassDescriptor is "Landroid/app/Activity;" or "Landroid/content/Context;" or "Landroid/os/BaseBundle;" or "Landroid/os/Bundle;" or "Landroid/content/Intent;" or "Landroid/widget/Toast;" or "Ljava/lang/String;" or "Ljava/lang/StringBuilder;" or "Ljava/lang/CharSequence;" or "Ljava/util/concurrent/TimeUnit;" or "Ljava/util/concurrent/ThreadPoolExecutor;" or "Ljava/util/concurrent/ExecutorService;" or "Ljava/util/concurrent/Executor;" or "Ljava/util/concurrent/FutureTask;" or "Ljava/util/concurrent/Future;" or "Ljava/util/concurrent/ThreadFactory;" or "Landroid/os/Handler;" or "Landroid/os/Looper;" or "Ljava/lang/Class;" or "Ljava/lang/Enum;" or "Ljava/lang/reflect/Method;" or "Ljava/util/ArrayDeque;" or "Ljava/util/Deque;" or "Ljava/util/Queue;" or "Ljava/util/LinkedHashSet;" or "Ljava/util/LinkedHashMap;" or "Ljava/util/concurrent/ConcurrentHashMap;" or "Landroid/view/LayoutInflater;" or "Landroid/content/SharedPreferences;" or "Landroid/content/SharedPreferences$Editor;" or "Ljava/util/Locale;" or "Ljava/util/Date;" or "Ljava/text/SimpleDateFormat;" or "Ljava/util/Collection;" or "Ljava/util/List;" or "Ljava/util/Set;") return false;
+        if (api.ClassDescriptor is "Landroid/app/Activity;" or "Landroid/content/Context;" or "Landroid/os/BaseBundle;" or "Landroid/os/Bundle;" or "Landroid/content/Intent;" or "Landroid/widget/Toast;" or "Ljava/lang/String;" or "Ljava/lang/StringBuilder;" or "Ljava/lang/CharSequence;" or "Ljava/util/concurrent/TimeUnit;" or "Ljava/util/concurrent/ThreadPoolExecutor;" or "Ljava/util/concurrent/ExecutorService;" or "Ljava/util/concurrent/Executor;" or "Ljava/util/concurrent/FutureTask;" or "Ljava/util/concurrent/Future;" or "Ljava/util/concurrent/ThreadFactory;" or "Landroid/os/Handler;" or "Landroid/os/Looper;" or "Ljava/lang/Class;" or "Ljava/lang/Enum;" or "Ljava/lang/reflect/Method;" or "Ljava/util/ArrayDeque;" or "Ljava/util/Deque;" or "Ljava/util/Queue;" or "Ljava/util/LinkedHashSet;" or "Ljava/util/LinkedHashMap;" or "Ljava/util/concurrent/ConcurrentHashMap;" or "Landroid/view/LayoutInflater;" or "Landroid/content/SharedPreferences;" or "Landroid/content/SharedPreferences$Editor;" or "Ljava/util/Locale;" or "Ljava/util/Date;" or "Ljava/text/SimpleDateFormat;" or "Ljava/util/Collection;" or "Ljava/util/List;" or "Ljava/util/Set;" or "Ljava/lang/Runtime;") return false;
         return null;
     }
 

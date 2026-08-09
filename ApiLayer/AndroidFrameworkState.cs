@@ -286,6 +286,11 @@ public sealed class AndroidFrameworkState : IDisposable
     /// Real Android has per-locale objects; one honest neutral locale is enough
     /// for this runtime (no localization pipeline).</summary>
     internal DexObject LocaleObject { get; } = new("Ljava/util/Locale;");
+    /// <summary>The stable java.lang.Runtime singleton returned by
+    /// Runtime.getRuntime() (real contract: one runtime object per process).
+    /// Canonical identity, same reasoning as LocaleObject; the informational
+    /// methods (availableProcessors/memory/gc) are stateless reads off it.</summary>
+    internal DexObject RuntimeObject { get; } = new("Ljava/lang/Runtime;");
     /// <summary>Stable Window facade returned by Activity.getWindow(); content
     /// plumbing lives in the UI session, the object is stateless.</summary>
     internal DexObject WindowObject { get; } = new("Landroid/view/Window;");

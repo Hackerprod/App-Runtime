@@ -181,6 +181,7 @@ public static class AndroidApiBindings
 		KotlinCollectionsCollectionsKtBindings.Register(builder, state);
 		JavaUtilArraysBindings.Register(builder, state);
 		JavaLangMathBindings.Register(builder, state);
+		JavaLangRuntimeBindings.Register(builder, state);
 		AndroidContentSharedPreferencesBindings.Register(builder, state);
 		RegisterWeakHashMaps(builder, state);
 		RegisterHashMaps(builder, state);
