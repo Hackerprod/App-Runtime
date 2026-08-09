@@ -174,6 +174,7 @@ public static class AndroidApiBindings
 		JavaUtilArrayDequeBindings.Register(builder, state);
 		JavaUtilLinkedHashSetBindings.Register(builder, state);
 		JavaUtilLinkedHashMapBindings.Register(builder, state);
+		JavaUtilLocaleBindings.Register(builder, state);
 		AndroidContentSharedPreferencesBindings.Register(builder, state);
 		RegisterWeakHashMaps(builder, state);
 		RegisterHashMaps(builder, state);
@@ -701,45 +702,12 @@ public static class AndroidApiBindings
 		{
 			return "en-US";
 		});
-		builder.Register(Api("Ljava/util/Locale;", "getLanguage", "()Ljava/lang/String;"), delegate(AndroidApiInvocation _, object[] args)
-		{
-			return RequireDex(args[0]).InstanceFields.TryGetValue("_language", out var language) && language is string text ? text : "en";
-		});
-		// Locale(String, String): the app constructs a locale; its language/country
-		// args are retained so the getters answer from the app's own values.
-		builder.Register(Api("Ljava/util/Locale;", "<init>", "(Ljava/lang/String;Ljava/lang/String;)V"), delegate(AndroidApiInvocation _, object[] args)
-		{
-			var locale = RequireDex(args[0]);
-			locale.InstanceFields["_language"] = RequireString(args[1], allowNull: true);
-			locale.InstanceFields["_country"] = args.Length > 2 ? RequireString(args[2], allowNull: true) : null;
-			return null!;
-		});
-		builder.Register(Api("Ljava/util/Locale;", "<init>", "(Ljava/lang/String;)V"), delegate(AndroidApiInvocation _, object[] args)
-		{
-			RequireDex(args[0]).InstanceFields["_language"] = RequireString(args[1], allowNull: true);
-			return null!;
-		});
-		// Locale.forLanguageTag("en-US"): static; parses the tag into language/country.
-		builder.Register(Api("Ljava/util/Locale;", "forLanguageTag", "(Ljava/lang/String;)Ljava/util/Locale;"), delegate(AndroidApiInvocation _, object[] args)
-		{
-			string tag = RequireString(args[0], allowNull: true) ?? string.Empty;
-			var locale = new DexObject("Ljava/util/Locale;");
-			int dash = tag.IndexOf('-');
-			locale.InstanceFields["_language"] = dash < 0 ? tag : tag.Substring(0, dash);
-			locale.InstanceFields["_country"] = dash < 0 ? string.Empty : tag.Substring(dash + 1);
-			return locale;
-		});
-		builder.Register(Api("Ljava/util/Locale;", "getCountry", "()Ljava/lang/String;"), delegate(AndroidApiInvocation _, object[] args)
-		{
-			return RequireDex(args[0]).InstanceFields.TryGetValue("_country", out var country) && country is string text ? text : "US";
-		});
-		builder.Register(Api("Ljava/util/Locale;", "toString", "()Ljava/lang/String;"), delegate(AndroidApiInvocation _, object[] args)
-		{
-			var locale = RequireDex(args[0]);
-			string language = locale.InstanceFields.TryGetValue("_language", out var lang) && lang is string lt ? lt : "en";
-			string country = locale.InstanceFields.TryGetValue("_country", out var ctr) && ctr is string ct ? ct : "US";
-			return country.Length == 0 ? language : language + "_" + country;
-		});
+		// java.util.Locale bindings migrated to JavaUtilLocaleBindings.cs
+		// (constructors, getDefault, getLanguage/getCountry/getScript, toString
+		// with the real algorithm, toLanguageTag, equals/hashCode value semantics,
+		// clone, forLanguageTag, and the static constants via the framework
+		// static-field resolver). Removed from the monolith to avoid duplicate
+		// registration; see that file for the verified real contract.
 		RegisterResources(builder, state);
 		RegisterTypedArray(builder, state);
 		// No service binding exists in this runtime: bindService honestly returns

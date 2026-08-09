@@ -379,6 +379,9 @@ public sealed class AndroidApiRegistry
         if (api.ClassDescriptor == "Ljava/util/concurrent/TimeUnit;" && api.MethodName == "values") return true;
         if (api.ClassDescriptor == "Ljava/lang/Enum;" && api.MethodName == "valueOf") return true;
         if (api.ClassDescriptor == "Ljava/lang/String;" && api.MethodName == "format") return true;
+        // Locale.getDefault()/getDefault(Category)/forLanguageTag are static
+        // factories; the accessors and value methods are instance calls.
+        if (api.ClassDescriptor == "Ljava/util/Locale;" && api.MethodName is "getDefault" or "forLanguageTag") return true;
         // Class.forName is static; the blanket instance default below would otherwise
         // misreport a genuine static call as a shape mismatch instead of the honest
         // unimplemented boundary.
@@ -392,7 +395,7 @@ public sealed class AndroidApiRegistry
             if (api.MethodName is "toString" or "hashCode" or "compare" && api.MethodDescriptor.Length > 2 && api.MethodDescriptor[1] != ')') return true;
             return false;
         }
-        if (api.ClassDescriptor is "Landroid/app/Activity;" or "Landroid/content/Context;" or "Landroid/os/BaseBundle;" or "Landroid/os/Bundle;" or "Landroid/content/Intent;" or "Landroid/widget/Toast;" or "Ljava/lang/String;" or "Ljava/lang/StringBuilder;" or "Ljava/lang/CharSequence;" or "Ljava/util/concurrent/TimeUnit;" or "Ljava/util/concurrent/ThreadPoolExecutor;" or "Ljava/util/concurrent/ExecutorService;" or "Ljava/util/concurrent/Executor;" or "Ljava/util/concurrent/FutureTask;" or "Ljava/util/concurrent/Future;" or "Ljava/util/concurrent/ThreadFactory;" or "Landroid/os/Handler;" or "Landroid/os/Looper;" or "Ljava/lang/Class;" or "Ljava/lang/Enum;" or "Ljava/lang/reflect/Method;" or "Ljava/util/ArrayDeque;" or "Ljava/util/Deque;" or "Ljava/util/Queue;" or "Ljava/util/LinkedHashSet;" or "Ljava/util/LinkedHashMap;" or "Ljava/util/concurrent/ConcurrentHashMap;" or "Landroid/view/LayoutInflater;" or "Landroid/content/SharedPreferences;" or "Landroid/content/SharedPreferences$Editor;") return false;
+        if (api.ClassDescriptor is "Landroid/app/Activity;" or "Landroid/content/Context;" or "Landroid/os/BaseBundle;" or "Landroid/os/Bundle;" or "Landroid/content/Intent;" or "Landroid/widget/Toast;" or "Ljava/lang/String;" or "Ljava/lang/StringBuilder;" or "Ljava/lang/CharSequence;" or "Ljava/util/concurrent/TimeUnit;" or "Ljava/util/concurrent/ThreadPoolExecutor;" or "Ljava/util/concurrent/ExecutorService;" or "Ljava/util/concurrent/Executor;" or "Ljava/util/concurrent/FutureTask;" or "Ljava/util/concurrent/Future;" or "Ljava/util/concurrent/ThreadFactory;" or "Landroid/os/Handler;" or "Landroid/os/Looper;" or "Ljava/lang/Class;" or "Ljava/lang/Enum;" or "Ljava/lang/reflect/Method;" or "Ljava/util/ArrayDeque;" or "Ljava/util/Deque;" or "Ljava/util/Queue;" or "Ljava/util/LinkedHashSet;" or "Ljava/util/LinkedHashMap;" or "Ljava/util/concurrent/ConcurrentHashMap;" or "Landroid/view/LayoutInflater;" or "Landroid/content/SharedPreferences;" or "Landroid/content/SharedPreferences$Editor;" or "Ljava/util/Locale;") return false;
         return null;
     }
 

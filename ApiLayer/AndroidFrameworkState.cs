@@ -543,7 +543,46 @@ public sealed class AndroidFrameworkState : IDisposable
                 _ => null
             };
         }
+        // java.util.Locale static constants (Locale.US, Locale.ENGLISH, etc.):
+        // canonical stable singletons per constant, resolved through the same
+        // framework static-field hook as TimeUnit/Build constants (sget path).
+        // Only the probe-referenced constants are materialized; unknown names
+        // resolve null (honest — the class has no other static fields modeled).
+        if (classDescriptor == "Ljava/util/Locale;")
+            return EnsureLocaleConstant(fieldName);
         return null;
+    }
+
+    private readonly object _localeConstantGate = new();
+    private readonly Dictionary<string, DexObject> _localeConstants = new(StringComparer.Ordinal);
+
+    /// <summary>Returns the canonical Locale constant for a referenced name
+    /// (Locale.US/ENGLISH/KOREAN/ROOT, per the APK probe), creating it once with
+    /// the REAL values (libcore Locale constants: US=en_US, ENGLISH=en,
+    /// KOREAN=ko, ROOT=""). The same DexObject is returned for the same name so
+    /// reference identity holds (real Java static final constants). Unknown
+    /// names return null.</summary>
+    internal DexObject? EnsureLocaleConstant(string name)
+    {
+        lock (_localeConstantGate)
+        {
+            if (_localeConstants.TryGetValue(name, out var existing)) return existing;
+            (string language, string country) = name switch
+            {
+                "US" => ("en", "US"),
+                "ENGLISH" => ("en", string.Empty),
+                "KOREAN" => ("ko", string.Empty),
+                "ROOT" => (string.Empty, string.Empty),
+                _ => (null!, null!)
+            };
+            if (language is null) return null;
+            var constant = new DexObject("Ljava/util/Locale;");
+            constant.InstanceFields["language"] = language;
+            constant.InstanceFields["country"] = country;
+            constant.InstanceFields["variant"] = string.Empty;
+            _localeConstants[name] = constant;
+            return constant;
+        }
     }
 
     // ---------------------------------------------------------------------------
