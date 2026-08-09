@@ -370,7 +370,7 @@ public sealed class AndroidApiRegistry
 
     private static bool? KnownStaticShape(AndroidApiMethodId api)
     {
-        if (api.ClassDescriptor is "Landroid/util/Log;" or "Landroid/text/TextUtils;" or "Landroid/graphics/Color;" or "Landroid/os/SystemClock;" or "Ljava/util/concurrent/Executors;") return true;
+        if (api.ClassDescriptor is "Landroid/util/Log;" or "Landroid/text/TextUtils;" or "Landroid/graphics/Color;" or "Landroid/os/SystemClock;" or "Ljava/util/concurrent/Executors;" or "Ljava/util/Collections;") return true;
         if (api.ClassDescriptor == "Landroid/os/Looper;" && api.MethodName is "getMainLooper" or "myLooper" or "prepare" or "loop") return true;
         if (api.ClassDescriptor == "Ljava/lang/String;" && api.MethodName == "valueOf") return true;
         if (api.ClassDescriptor == "Landroid/widget/Toast;" && api.MethodName == "makeText") return true;

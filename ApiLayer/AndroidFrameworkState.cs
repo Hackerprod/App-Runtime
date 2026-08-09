@@ -666,7 +666,20 @@ internal sealed class WeakHashMapPeer
 internal sealed class HashMapPeer
 {
     private static readonly object NullKey = new();
-    private readonly Dictionary<object, object?> _entries = new();
+    private readonly Dictionary<object, object?> _entries;
+
+    internal HashMapPeer() => _entries = new();
+    /// <summary>Wrapper over a SHARED backing dictionary (Collections.unmodifiableMap):
+    /// the wrapper and its backing map see the same entries.</summary>
+    internal HashMapPeer(Dictionary<object, object?> shared) => _entries = shared;
+    /// <summary>True for Collections.unmodifiableMap/emptyMap/singletonMap wrappers:
+    /// writes throw UnsupportedOperationException, reads delegate.</summary>
+    internal bool Unmodifiable { get; set; }
+    internal void RequireMutable()
+    {
+        if (Unmodifiable)
+            throw new GuestExceptionCarrier(GuestThrowableMetadata.Create("Ljava/lang/UnsupportedOperationException;"));
+    }
 
     internal object? Put(object? key, object? value)
     {
@@ -686,6 +699,9 @@ internal sealed class HashMapPeer
     }
     internal int Count => _entries.Count;
     internal void Clear() => _entries.Clear();
+    /// <summary>Exposes the backing dictionary for a shared-wrapper (unmodifiableMap
+    /// wraps the same dictionary as its backing map).</summary>
+    internal Dictionary<object, object?> SharedEntries() => _entries;
     /// <summary>Enumerates the map's key/value pairs, translating the null-key
     /// sentinel back to null on the way out (mirrors Get/Remove) so views can
     /// consume the same shape as WeakHashMapPeer.Entries.</summary>
@@ -698,10 +714,22 @@ internal sealed class HashMapPeer
 
 /// <summary>Mutable ordered-list state shared by guest ArrayList and
 /// CopyOnWriteArrayList (both are index-ordered List<object?> with nullable
-/// elements; the two API classes differ only in binding surface, not shape).</summary>
+/// elements; the two API classes differ only in binding surface, not shape).
+/// Unmodifiable marks an immutable wrapper (Collections.unmodifiableList/
+/// emptyList/singletonList) whose writes throw UnsupportedOperationException.</summary>
 internal sealed class ListPeer
 {
-    internal List<object?> Elements { get; } = new();
+    internal List<object?> Elements { get; }
+    internal ListPeer() => Elements = new();
+    /// <summary>Wrapper over a SHARED backing list (Collections.unmodifiableList):
+    /// the wrapper and its backing list see the same elements.</summary>
+    internal ListPeer(List<object?> shared) => Elements = shared;
+    internal bool Unmodifiable { get; set; }
+    internal void RequireMutable()
+    {
+        if (Unmodifiable)
+            throw new GuestExceptionCarrier(GuestThrowableMetadata.Create("Ljava/lang/UnsupportedOperationException;"));
+    }
 }
 
 /// <summary>
@@ -961,6 +989,7 @@ internal static class AndroidFrameworkHierarchy
         ["Ljava/lang/ArrayIndexOutOfBoundsException;"] = "Ljava/lang/IndexOutOfBoundsException;",
         ["Ljava/lang/StringIndexOutOfBoundsException;"] = "Ljava/lang/IndexOutOfBoundsException;",
         ["Ljava/lang/NumberFormatException;"] = "Ljava/lang/IllegalArgumentException;",
+        ["Ljava/lang/UnsupportedOperationException;"] = "Ljava/lang/RuntimeException;",
         ["Ljava/lang/NegativeArraySizeException;"] = "Ljava/lang/RuntimeException;",
         ["Ljava/util/NoSuchElementException;"] = "Ljava/lang/RuntimeException;",
         ["Ljava/lang/InterruptedException;"] = "Ljava/lang/Exception;",

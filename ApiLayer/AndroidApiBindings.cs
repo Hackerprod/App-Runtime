@@ -94,6 +94,7 @@ public static class AndroidApiBindings
 		RegisterToasts(builder, state);
 		JavaUtilConcurrentAtomicBindings.Register(builder, state);
 		JavaUtilMapBindings.Register(builder, state);
+		JavaUtilCollectionsBindings.Register(builder, state);
 		RegisterWeakHashMaps(builder, state);
 		RegisterHashMaps(builder, state);
 		RegisterArrayLists(builder, state);
@@ -137,10 +138,10 @@ public static class AndroidApiBindings
 			state.HashMaps.Add(Receiver(args), new HashMapPeer());
 			return null!;
 		});
-		builder.Register(Api("Ljava/util/HashMap;", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"), (AndroidApiInvocation _, object[] args) => state.HashMaps.Get(Receiver(args)).Put(args[1], args[2]));
+		builder.Register(Api("Ljava/util/HashMap;", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"), (AndroidApiInvocation _, object[] args) => { state.HashMaps.Get(Receiver(args)).RequireMutable(); return state.HashMaps.Get(Receiver(args)).Put(args[1], args[2]); });
 		builder.Register(Api("Ljava/util/HashMap;", "get", "(Ljava/lang/Object;)Ljava/lang/Object;"), (AndroidApiInvocation _, object[] args) => state.HashMaps.Get(Receiver(args)).Get(args[1]));
 		builder.Register(Api("Ljava/util/HashMap;", "containsKey", "(Ljava/lang/Object;)Z"), (AndroidApiInvocation _, object[] args) => state.HashMaps.Get(Receiver(args)).ContainsKey(args[1]) ? 1 : 0);
-		builder.Register(Api("Ljava/util/HashMap;", "remove", "(Ljava/lang/Object;)Ljava/lang/Object;"), (AndroidApiInvocation _, object[] args) => state.HashMaps.Get(Receiver(args)).Remove(args[1]));
+		builder.Register(Api("Ljava/util/HashMap;", "remove", "(Ljava/lang/Object;)Ljava/lang/Object;"), (AndroidApiInvocation _, object[] args) => { state.HashMaps.Get(Receiver(args)).RequireMutable(); return state.HashMaps.Get(Receiver(args)).Remove(args[1]); });
 		builder.Register(Api("Ljava/util/HashMap;", "size", "()I"), (AndroidApiInvocation _, object[] args) => state.HashMaps.Get(Receiver(args)).Count);
 	}
 
@@ -159,12 +160,14 @@ public static class AndroidApiBindings
 		});
 		builder.Register(Api("Ljava/util/ArrayList;", "add", "(Ljava/lang/Object;)Z"), delegate(AndroidApiInvocation _, object[] args)
 		{
+			state.ArrayLists.Get(Receiver(args)).RequireMutable();
 			state.ArrayLists.Get(Receiver(args)).Elements.Add(args[1]);
 			return 1;
 		});
 		builder.Register(Api("Ljava/util/ArrayList;", "add", "(ILjava/lang/Object;)V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			ListPeer listPeer = state.ArrayLists.Get(Receiver(args));
+			listPeer.RequireMutable();
 			int num = RequireInt(args[1]);
 			if ((uint)num > (uint)listPeer.Elements.Count)
 			{
@@ -183,6 +186,7 @@ public static class AndroidApiBindings
 		builder.Register(Api("Ljava/util/ArrayList;", "set", "(ILjava/lang/Object;)Ljava/lang/Object;"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			ListPeer listPeer = state.ArrayLists.Get(Receiver(args));
+			listPeer.RequireMutable();
 			int index = RequireInt(args[1]);
 			RequireListIndex(listPeer.Elements, index);
 			object result = listPeer.Elements[index];
@@ -193,6 +197,7 @@ public static class AndroidApiBindings
 		builder.Register(Api("Ljava/util/ArrayList;", "indexOf", "(Ljava/lang/Object;)I"), (AndroidApiInvocation _, object[] args) => state.ArrayLists.Get(Receiver(args)).Elements.IndexOf(args[1]));
 		builder.Register(Api("Ljava/util/ArrayList;", "clear", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
+			state.ArrayLists.Get(Receiver(args)).RequireMutable();
 			state.ArrayLists.Get(Receiver(args)).Elements.Clear();
 			return null!;
 		});
@@ -201,6 +206,7 @@ public static class AndroidApiBindings
 		builder.Register(Api("Ljava/util/ArrayList;", "remove", "(I)Ljava/lang/Object;"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			ListPeer listPeer = state.ArrayLists.Get(Receiver(args));
+			listPeer.RequireMutable();
 			int index = RequireInt(args[1]);
 			RequireListIndex(listPeer.Elements, index);
 			object result = listPeer.Elements[index];
