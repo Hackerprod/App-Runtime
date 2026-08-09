@@ -178,6 +178,7 @@ public static class AndroidApiBindings
 		JavaUtilDateBindings.Register(builder, state);
 		JavaTextDateFormatBindings.Register(builder, state);
 		KotlinCollectionsArraysKtBindings.Register(builder, state);
+		KotlinCollectionsCollectionsKtBindings.Register(builder, state);
 		AndroidContentSharedPreferencesBindings.Register(builder, state);
 		RegisterWeakHashMaps(builder, state);
 		RegisterHashMaps(builder, state);

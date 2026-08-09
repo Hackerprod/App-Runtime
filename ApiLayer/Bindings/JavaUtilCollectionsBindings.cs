@@ -167,7 +167,7 @@ internal static class JavaUtilCollectionsBindings
         return wrapper;
     }
 
-    private static void Sort(AndroidFrameworkState state, DexObject list, DexObject? comparator)
+    internal static void Sort(AndroidFrameworkState state, DexObject list, DexObject? comparator)
     {
         var peer = state.ArrayLists.Get(list);
         peer.RequireMutable();
