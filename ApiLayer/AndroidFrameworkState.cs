@@ -11,7 +11,7 @@ namespace AndroidRuntime.Core.ApiLayer;
 
 public sealed record AndroidPeerLimits
 {
-    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024, int maxBoxed = 1024, int maxMapEntries = 1024, int maxMapViews = 256, int maxLazies = 256, int maxArrayDeques = 256, int maxLinkedHashSets = 256)
+    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024, int maxBoxed = 1024, int maxMapEntries = 1024, int maxMapViews = 256, int maxLazies = 256, int maxArrayDeques = 256, int maxLinkedHashSets = 256, int maxLinkedHashMaps = 256)
     {
         StringBuilders = maxStringBuilders;
         Bundles = maxBundles;
@@ -40,6 +40,7 @@ public sealed record AndroidPeerLimits
         Lazies = maxLazies;
         ArrayDeques = maxArrayDeques;
         LinkedHashSets = maxLinkedHashSets;
+        LinkedHashMaps = maxLinkedHashMaps;
         Validate();
     }
 
@@ -71,10 +72,11 @@ public sealed record AndroidPeerLimits
     public int Lazies { get; }
     public int ArrayDeques { get; }
     public int LinkedHashSets { get; }
+    public int LinkedHashMaps { get; }
 
     public void Validate()
     {
-        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0 || Boxed <= 0 || MapEntries <= 0 || MapViews <= 0 || Lazies <= 0 || ArrayDeques <= 0 || LinkedHashSets <= 0)
+        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0 || Boxed <= 0 || MapEntries <= 0 || MapViews <= 0 || Lazies <= 0 || ArrayDeques <= 0 || LinkedHashSets <= 0 || LinkedHashMaps <= 0)
             throw new ArgumentOutOfRangeException(nameof(AndroidPeerLimits), "Peer limits must be positive.");
     }
 }
@@ -167,6 +169,7 @@ public sealed class AndroidFrameworkState : IDisposable
         Lazies = new AndroidPeerStore<LazyPeer>("Lazy", PeerLimits.Lazies);
         ArrayDeques = new AndroidPeerStore<ListPeer>("ArrayDeque", PeerLimits.ArrayDeques);
         LinkedHashSets = new AndroidPeerStore<OrderedSetPeer>("LinkedHashSet", PeerLimits.LinkedHashSets);
+        LinkedHashMaps = new AndroidPeerStore<LinkedHashMapPeer>("LinkedHashMap", PeerLimits.LinkedHashMaps);
         ApplicationContext = new DexObject("Landroid/app/Application;");
         LauncherIntent = new DexObject("Landroid/content/Intent;");
         Intents.Add(LauncherIntent, new IntentPeer { Action = "android.intent.action.MAIN" });
@@ -224,6 +227,7 @@ public sealed class AndroidFrameworkState : IDisposable
     internal AndroidPeerStore<LazyPeer> Lazies { get; }
     internal AndroidPeerStore<ListPeer> ArrayDeques { get; }
     internal AndroidPeerStore<OrderedSetPeer> LinkedHashSets { get; }
+    internal AndroidPeerStore<LinkedHashMapPeer> LinkedHashMaps { get; }
     /// <summary>The session's GIL: shared by the interpreter and every binding that
     /// must release it around real blocking (sleep/join/monitor-enter/class-init
     /// wait). AndroidAppRuntime replaces this with the execution lane's GIL.</summary>
@@ -517,6 +521,7 @@ public sealed class AndroidFrameworkState : IDisposable
         Lazies.Clear();
         ArrayDeques.Clear();
         LinkedHashSets.Clear();
+        LinkedHashMaps.Clear();
         Activity = null;
         SystemServices?.Dispose();
     }
@@ -880,6 +885,83 @@ internal sealed class OrderedSetPeer
     internal bool Remove(object? value) => Elements.Remove(value);
     internal int Count => Elements.Count;
     internal void Clear() => Elements.Clear();
+}
+
+/// <summary>
+/// Ordered map state for a guest java.util.LinkedHashMap. Storage mirrors
+/// HashMapPeer (private dictionary + null-key sentinel, CLR equality for keys);
+/// a parallel key-order list preserves iteration order. accessOrder=false
+/// (default): insertion order, get/put on an existing key does NOT reorder
+/// (same as LinkedHashSet). accessOrder=true: ACCESS order — every successful
+/// get AND put (including updating an existing key) moves that entry to the end
+/// (most-recently-used-last). Investigation result: NO guest subclass overrides
+/// removeEldestEntry anywhere in the APK (the 3-arg constructor is called by
+/// androidx.collection.LruCache, which manages eviction manually via trimToSize)
+/// — so the removeEldestEntry eviction callback is NOT built (case: plain
+/// access-order semantics, no LRU-eviction machinery).
+/// </summary>
+internal sealed class LinkedHashMapPeer
+{
+    private static readonly object NullKey = new();
+    private readonly Dictionary<object, object?> _entries = new();
+    internal List<object> Order { get; } = new();
+    internal bool AccessOrder { get; set; }
+
+    internal int Count => _entries.Count;
+
+    internal object? Get(object? key)
+    {
+        object normalized = key ?? NullKey;
+        if (!_entries.TryGetValue(normalized, out var value)) return null;
+        if (AccessOrder) MoveToEnd(normalized);
+        return value;
+    }
+
+    internal object? Put(object? key, object? value)
+    {
+        object normalized = key ?? NullKey;
+        bool existed = _entries.TryGetValue(normalized, out var previous);
+        _entries[normalized] = value;
+        if (!existed) Order.Add(normalized);
+        else if (AccessOrder) MoveToEnd(normalized);
+        return existed ? previous : null;
+    }
+
+    internal bool Remove(object? key)
+    {
+        object normalized = key ?? NullKey;
+        if (!_entries.Remove(normalized)) return false;
+        Order.Remove(normalized);
+        return true;
+    }
+
+    internal object? RemoveValue(object? key)
+    {
+        object normalized = key ?? NullKey;
+        if (!_entries.TryGetValue(normalized, out var removed)) return null;
+        _entries.Remove(normalized);
+        Order.Remove(normalized);
+        return removed;
+    }
+
+    internal bool ContainsKey(object? key) => _entries.ContainsKey(key ?? NullKey);
+
+    internal void Clear()
+    {
+        _entries.Clear();
+        Order.Clear();
+    }
+
+    /// <summary>Ordered enumeration (insertion or access order per AccessOrder),
+    /// un-sentinelizing null keys — views read THIS, never an unordered scan.</summary>
+    internal IEnumerable<KeyValuePair<object?, object?>> Entries() =>
+        Order.Select(key => new KeyValuePair<object?, object?>(key == NullKey ? null : key, _entries[key]));
+
+    private void MoveToEnd(object key)
+    {
+        Order.Remove(key);
+        Order.Add(key);
+    }
 }
 
 /// <summary>

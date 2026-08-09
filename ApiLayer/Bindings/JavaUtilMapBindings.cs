@@ -24,6 +24,7 @@ namespace AndroidRuntime.Core.ApiLayer.Bindings;
 internal static class JavaUtilMapBindings
 {
     private const string HashMap = "Ljava/util/HashMap;";
+    private const string LinkedHashMap = "Ljava/util/LinkedHashMap;";
     private const string WeakHashMap = "Ljava/util/WeakHashMap;";
     private const string MapClass = "Ljava/util/Map;";
     private const string EntryClass = "Ljava/util/Map$Entry;";
@@ -34,6 +35,7 @@ internal static class JavaUtilMapBindings
     {
         // ---- Map views (snapshot Set/Collection per backing map type) ----
         RegisterFor(builder, state, HashMap, map: m => m);
+        RegisterFor(builder, state, LinkedHashMap, map: m => m);
         RegisterFor(builder, state, WeakHashMap, map: m => m);
         RegisterFor(builder, state, MapClass, map: m => m);
 
@@ -48,6 +50,7 @@ internal static class JavaUtilMapBindings
         // ---- Probe-confirmed additional Map methods ----
         // New commons (not in the monolith) for every bound map class.
         RegisterMapCommons(builder, state, HashMap);
+        RegisterMapCommons(builder, state, LinkedHashMap);
         RegisterMapCommons(builder, state, WeakHashMap);
         RegisterMapCommons(builder, state, MapClass);
         // The basic accessors exist per-concrete-class in the monolith; mirror the
@@ -112,11 +115,15 @@ internal static class JavaUtilMapBindings
 
 
 
+    internal static IEnumerable<KeyValuePair<object?, object?>> MapPairsFor(AndroidFrameworkState state, DexObject receiver) => MapPairs(state, receiver);
+
     private static IEnumerable<KeyValuePair<object?, object?>> MapPairs(AndroidFrameworkState state, object receiver)
     {
         var dex = (DexObject)receiver;
         if (dex.TypeDescriptor == WeakHashMap)
             return state.WeakHashMaps.Get(dex).Entries.Select(pair => new KeyValuePair<object?, object?>(pair.Key, pair.Value));
+        if (dex.TypeDescriptor == LinkedHashMap)
+            return state.LinkedHashMaps.Get(dex).Entries();
         return state.HashMaps.Get(dex).Entries();
     }
 
@@ -148,6 +155,7 @@ internal static class JavaUtilMapBindings
     private static object PutValue(AndroidFrameworkState state, object receiver, object? key, object? value)
     {
         var dex = (DexObject)receiver;
+        if (dex.TypeDescriptor == LinkedHashMap) return state.LinkedHashMaps.Get(dex).Put(key, value) ?? null!;
         if (dex.TypeDescriptor == WeakHashMap)
         {
             var entries = state.WeakHashMaps.Get(dex).Entries;
@@ -161,6 +169,7 @@ internal static class JavaUtilMapBindings
     private static object GetValue(AndroidFrameworkState state, object receiver, object? key)
     {
         var dex = (DexObject)receiver;
+        if (dex.TypeDescriptor == LinkedHashMap) return state.LinkedHashMaps.Get(dex).Get(key) ?? null!;
         return dex.TypeDescriptor == WeakHashMap
             ? (state.WeakHashMaps.Get(dex).Entries.TryGetValue(key!, out var value) ? value : null) ?? null!
             : state.HashMaps.Get(dex).Get(key) ?? null!;
@@ -169,12 +178,14 @@ internal static class JavaUtilMapBindings
     private static bool ContainsKey(AndroidFrameworkState state, object receiver, object? key)
     {
         var dex = (DexObject)receiver;
+        if (dex.TypeDescriptor == LinkedHashMap) return state.LinkedHashMaps.Get(dex).ContainsKey(key);
         return dex.TypeDescriptor == WeakHashMap ? state.WeakHashMaps.Get(dex).Entries.ContainsKey(key!) : state.HashMaps.Get(dex).ContainsKey(key);
     }
 
     private static object RemoveValue(AndroidFrameworkState state, object receiver, object? key)
     {
         var dex = (DexObject)receiver;
+        if (dex.TypeDescriptor == LinkedHashMap) return state.LinkedHashMaps.Get(dex).RemoveValue(key) ?? null!;
         if (dex.TypeDescriptor == WeakHashMap)
         {
             var entries = state.WeakHashMaps.Get(dex).Entries;
@@ -192,23 +203,27 @@ internal static class JavaUtilMapBindings
     private static int MapCount(AndroidFrameworkState state, object receiver)
     {
         var dex = (DexObject)receiver;
-        return dex.TypeDescriptor == WeakHashMap ? state.WeakHashMaps.Get(dex).Entries.Count : state.HashMaps.Get(dex).Count;
+        if (dex.TypeDescriptor == WeakHashMap) return state.WeakHashMaps.Get(dex).Entries.Count;
+        if (dex.TypeDescriptor == LinkedHashMap) return state.LinkedHashMaps.Get(dex).Count;
+        return state.HashMaps.Get(dex).Count;
     }
 
     private static void ClearMap(AndroidFrameworkState state, object receiver)
     {
         var dex = (DexObject)receiver;
+        if (dex.TypeDescriptor == LinkedHashMap) { state.LinkedHashMaps.Get(dex).Clear(); return; }
         if (dex.TypeDescriptor == WeakHashMap) state.WeakHashMaps.Get(dex).Entries.Clear();
         else state.HashMaps.Get(dex).Clear();
     }
 
     private static void PutAll(AndroidFrameworkState state, object target, object source)
     {
+        var targetDex = (DexObject)target;
+        if (targetDex.TypeDescriptor == LinkedHashMap) { foreach (var pair in MapPairs(state, source)) state.LinkedHashMaps.Get(targetDex).Put(pair.Key, pair.Value); return; }
         foreach (var pair in MapPairs(state, source))
         {
-            var dex = (DexObject)target;
-            if (dex.TypeDescriptor == WeakHashMap) state.WeakHashMaps.Get(dex).Entries[pair.Key!] = pair.Value;
-            else state.HashMaps.Get(dex).Put(pair.Key, pair.Value);
+            if (targetDex.TypeDescriptor == WeakHashMap) state.WeakHashMaps.Get(targetDex).Entries[pair.Key!] = pair.Value;
+            else state.HashMaps.Get(targetDex).Put(pair.Key, pair.Value);
         }
     }
 
@@ -226,14 +241,23 @@ internal static class JavaUtilMapBindings
         var dex = (DexObject)receiver;
         object? found = dex.TypeDescriptor == WeakHashMap
             ? (state.WeakHashMaps.Get(dex).Entries.TryGetValue(key!, out var weak) ? weak : null)
-            : state.HashMaps.Get(dex).Get(key);
-        object result = found ?? defaultValue ?? new object();
+            : dex.TypeDescriptor == LinkedHashMap
+                ? state.LinkedHashMaps.Get(dex).Get(key)
+                : state.HashMaps.Get(dex).Get(key);
+        object result = found ?? defaultValue ?? null!;
         return result;
     }
 
     private static bool RemoveIfValue(AndroidFrameworkState state, object receiver, object? key, object? expected)
     {
         var dex = (DexObject)receiver;
+        if (dex.TypeDescriptor == LinkedHashMap)
+        {
+            var lhm = state.LinkedHashMaps.Get(dex);
+            if (!lhm.ContainsKey(key) || !Equals(lhm.Get(key), expected)) return false;
+            lhm.Remove(key);
+            return true;
+        }
         if (dex.TypeDescriptor == WeakHashMap)
         {
             var entries = state.WeakHashMaps.Get(dex).Entries;
@@ -250,7 +274,7 @@ internal static class JavaUtilMapBindings
 
     private static bool MapEquals(AndroidFrameworkState state, object receiver, object? other)
     {
-        if (other is not DexObject otherDex || otherDex.TypeDescriptor is not (HashMap or WeakHashMap)) return false;
+        if (other is not DexObject otherDex || otherDex.TypeDescriptor is not (HashMap or WeakHashMap or LinkedHashMap)) return false;
         var left = MapPairs(state, receiver).ToList();
         var right = MapPairs(state, otherDex).ToList();
         if (left.Count != right.Count) return false;
