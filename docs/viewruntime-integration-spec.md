@@ -193,3 +193,39 @@ test cases.
 5. Font selection: what font(s) does ViewRuntime actually render with
    today, and does it need a font name/family hint from App Runtime, or is
    a fixed system font acceptable for Phase 1?
+
+## Confirmed answers (ViewRuntime's response, App Runtime's confirmations)
+
+ViewRuntime's response: shape confirmed workable (its `display_list_t`/
+`paint_command_t` model already matches a flat call-per-command ABI well —
+individual `draw_*` calls preferred over a submitted command-buffer union,
+which would need fragile C#-side marshaling); **ViewRuntime currently only
+records display lists, it does not rasterize yet** — Phase 1 requires it to
+add an actual rasterizer (rect fill + `stb_truetype` glyph blit + clip),
+described as feasible and bounded. UTF-16 accepted (converts internally at
+the boundary, cost lives in ViewRuntime). Color: internal `color_rgba`
+(float 0..1), accepts straight (non-premultiplied) `uint8 A,R,G,B` and
+converts at the boundary — matches. Compositing: **Option A confirmed**
+(ViewRuntime has no existing Windows output path at all — never targeted
+Direct2D/GDI/HWND, display-lists-only until now) — surface exposes an
+ARGB8888 buffer + pitch at frame end for App Runtime to blit into WPF.
+Font: `android_ui_set_font(path)` already loads one system font via
+`stb_truetype` for both measurement and drawing (same measurer for both —
+already pixel-perfect-consistent by construction); a fixed system font for
+Phase 1 is fine, set once at `viewruntime_surface_create`.
+
+**Question asked back, answered**: does `AndroidDrawTextCommand`'s rect
+mean an already-positioned text box, or the view's box needing internal
+alignment? **Confirmed by re-reading `Ui\AndroidSceneHost.cs` directly**:
+`AndroidTextViewNode.Record` passes its own `Bounds` — the view's full,
+already-laid-out rectangle (set by `Layout(x,y,width,height,...)`), not a
+tightened-to-text box. **Draw text from the rect's top-left corner,
+clipped to the rect — confirmed correct, not just a reasonable fallback.**
+This is Android's own real default `TextView` gravity (`Gravity.TOP |
+Gravity.START`) — and it's the ONLY correct behavior here regardless,
+because **`android:gravity`/text centering is not modeled anywhere in this
+codebase yet** (verified: zero references to "gravity" in `Ui\*.cs` or the
+API bindings). If a future guest layout sets `android:gravity="center"`
+and expects centered text, that will visibly not centre — a known, shared
+bounded limitation on the App Runtime side, not something for ViewRuntime
+to compensate for.
