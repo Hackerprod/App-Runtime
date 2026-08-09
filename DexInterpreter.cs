@@ -78,6 +78,43 @@ namespace AndroidRuntime.Core.Dex
         internal Func<string, string, object> FrameworkStaticField { get; set; }
 
         /// <summary>
+        /// Provider that materializes the canonical Class object for a type
+        /// descriptor (const-class uses it; Object.getClass and friends share the
+        /// same cache so reference identity holds). Wired by
+        /// AndroidFrameworkState.AttachInterpreter.
+        /// </summary>
+        internal Func<string, DexObject> ClassObjectProvider { get; set; }
+
+        /// <summary>Runtime type descriptor of a reference value (the same logic
+        /// virtual dispatch uses). Exposed for Object.getClass.</summary>
+        internal string RuntimeDescriptorOf(object receiver) => DynamicDescriptor(receiver);
+
+        /// <summary>Assignability under this session's guest+framework hierarchy,
+        /// exposed for Class.isInstance/isAssignableFrom.</summary>
+        internal bool IsGuestTypeAssignable(string actual, string expected) => IsTypeAssignable(actual, expected);
+
+        /// <summary>Superclass descriptor resolution (guest chain + framework
+        /// parents), exposed for Class.getSuperclass. Returns null for Object,
+        /// arrays, and primitives (no resolvable superclass here).</summary>
+        internal string SuperclassDescriptorOf(string descriptor) => SuperclassOf(descriptor);
+
+        /// <summary>
+        /// Every initialized static field value that is a reference to the given
+        /// enum class — the constants a guest &lt;clinit&gt; stored via sput-object.
+        /// Used by Enum.valueOf to find a constant by name (the caller filters by
+        /// the EnumPeer name; DexClass exposes no field table, so this iterates the
+        /// interpreter's static-field table instead).
+        /// </summary>
+        internal IEnumerable<object> EnumConstantsOf(string enumDescriptor)
+        {
+            foreach (var entry in _staticFields)
+            {
+                if (entry.Value is DexObject obj && obj.TypeDescriptor == enumDescriptor)
+                    yield return obj;
+            }
+        }
+
+        /// <summary>
         /// Invokes one bound framework API directly from a binding (used by
         /// Executors to call a guest ThreadFactory.newThread and start the
         /// resulting guest Thread through the existing Thread.start machinery, and
@@ -533,8 +570,16 @@ namespace AndroidRuntime.Core.Dex
                             break;
 
                         case 0x1c: // const-class vAA, type@BBBB (21c)
-                            regs[hiByte] = new DexObject(dex.TypeDescriptors[insns[pc + 1]]);
-                            pc += 2;
+                            {
+                                string descriptor = dex.TypeDescriptors[insns[pc + 1]];
+                                // A guest Class object carries its OWN type identity as
+                                // "Ljava/lang/Class;" — the represented type lives in the
+                                // canonical ClassPeer cache, so virtual dispatch resolves
+                                // Class.getName() etc. (a DexObject typed as the
+                                // represented class would walk that class's chain instead).
+                                regs[hiByte] = ClassObjectProvider != null ? ClassObjectProvider(descriptor) : new DexObject("Ljava/lang/Class;");
+                                pc += 2;
+                            }
                             break;
 
                         case 0x1d: case 0x1e: // monitor-enter / monitor-exit vAA (11x)

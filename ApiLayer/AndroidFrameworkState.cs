@@ -249,6 +249,78 @@ public sealed class AndroidFrameworkState : IDisposable
         // Framework static-field reads (e.g. TimeUnit.SECONDS via sget) resolve
         // through this hook: framework classes have no DEX <clinit>/field table.
         interpreter.FrameworkStaticField = ResolveFrameworkStaticField;
+        // const-class and Object.getClass() produce Class objects through the SAME
+        // canonical per-descriptor cache, so reference identity holds (real Java
+        // compares Class objects with == / equals identity).
+        interpreter.ClassObjectProvider = EnsureClassObject;
+    }
+
+    // ---------------------------------------------------------------------------
+    // java.lang.Class canonical cache
+    // ---------------------------------------------------------------------------
+
+    private readonly object _classCacheGate = new();
+    private readonly Dictionary<string, DexObject> _classObjects = new(StringComparer.Ordinal);
+    private readonly Dictionary<DexObject, ClassPeer> _classPeers = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>Returns the canonical Class object for a type descriptor: the same
+    /// DexObject for the same descriptor from any code path (const-class,
+    /// Object.getClass, Enum.getDeclaringClass, getSuperclass). Real Java compares
+    /// Class objects by identity, so one object per descriptor is REQUIRED for
+    /// correctness, not a style choice. The cache is bounded by the number of
+    /// distinct type descriptors actually referenced/constructed in the session —
+    /// no quota store needed (the mutable-peer quota pattern doesn't apply to a
+    /// cache that cannot grow beyond the loaded type universe).</summary>
+    internal DexObject EnsureClassObject(string descriptor)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor);
+        lock (_classCacheGate)
+        {
+            if (_classObjects.TryGetValue(descriptor, out var existing)) return existing;
+            var classObject = new DexObject("Ljava/lang/Class;");
+            _classObjects[descriptor] = classObject;
+            _classPeers[classObject] = new ClassPeer(descriptor);
+            return classObject;
+        }
+    }
+
+    internal ClassPeer ClassPeerOf(DexObject classObject)
+    {
+        lock (_classCacheGate)
+            return _classPeers.TryGetValue(classObject, out var peer)
+                ? peer
+                : throw new InvalidOperationException("Class peer is not initialized for " + classObject);
+    }
+
+    // ---------------------------------------------------------------------------
+    // java.lang.Package canonical cache
+    // ---------------------------------------------------------------------------
+
+    private readonly object _packageCacheGate = new();
+    private readonly Dictionary<string, DexObject> _packageObjects = new(StringComparer.Ordinal);
+    private readonly Dictionary<DexObject, PackagePeer> _packagePeers = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>Canonical Package object per package name (same identity reasoning
+    /// as the Class cache: real code compares Package references).</summary>
+    internal DexObject EnsurePackageObject(string packageName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageName);
+        lock (_packageCacheGate)
+        {
+            if (_packageObjects.TryGetValue(packageName, out var existing)) return existing;
+            var packageObject = new DexObject("Ljava/lang/Package;");
+            _packageObjects[packageName] = packageObject;
+            _packagePeers[packageObject] = new PackagePeer(packageName);
+            return packageObject;
+        }
+    }
+
+    internal PackagePeer PackagePeerOf(DexObject packageObject)
+    {
+        lock (_packageCacheGate)
+            return _packagePeers.TryGetValue(packageObject, out var peer)
+                ? peer
+                : throw new InvalidOperationException("Package peer is not initialized for " + packageObject);
     }
 
     /// <summary>Materializes the TimeUnit constants as stable framework singletons
@@ -593,6 +665,14 @@ internal sealed class ThreadPeer
 /// TimeUnit is a JDK enum — the constants are framework singletons, deliberately
 /// OUTSIDE the guest Enum machinery (which only covers DEX-defined enums).</summary>
 internal sealed record TimeUnitConstantPeer(string Name, int Ordinal, long NanosPerUnit);
+
+/// <summary>Identity state for a guest java.lang.Class object: WHICH type it
+/// represents. The Class DexObject's own TypeDescriptor is always
+/// "Ljava/lang/Class;" — the represented type lives here.</summary>
+internal sealed record ClassPeer(string RepresentedDescriptor);
+
+/// <summary>Identity state for a guest java.lang.Package object.</summary>
+internal sealed record PackagePeer(string Name);
 
 /// <summary>
 /// Completion/state for a guest java.util.concurrent.Future. State transitions:
