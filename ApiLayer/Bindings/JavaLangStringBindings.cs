@@ -132,10 +132,11 @@ internal static class JavaLangStringBindings
     }
 
     // ---------------------------------------------------------------------------
-    // Core helpers
+    // Core helpers (internal: shared with kotlin.text.StringsKt bindings, which
+    // delegate to the SAME logic instead of reimplementing)
     // ---------------------------------------------------------------------------
 
-    private static string Substring(string value, int begin, int end)
+    internal static string Substring(string value, int begin, int end)
     {
         if (begin < 0) throw StringIndexOutOfBounds(begin);
         if (end > value.Length) throw StringIndexOutOfBounds(end);
@@ -143,10 +144,7 @@ internal static class JavaLangStringBindings
         return value.Substring(begin, end - begin);
     }
 
-    private static GuestExceptionCarrier StringIndexOutOfBounds(int index) =>
-        new(GuestThrowableMetadata.Create("Ljava/lang/StringIndexOutOfBoundsException;", index.ToString(CultureInfo.InvariantCulture)));
-
-    private static int JavaCompareTo(string left, string right)
+    internal static int JavaCompareTo(string left, string right)
     {
         int shared = Math.Min(left.Length, right.Length);
         for (int index = 0; index < shared; index++)
@@ -157,7 +155,7 @@ internal static class JavaLangStringBindings
         return left.Length - right.Length;
     }
 
-    private static int JavaCompareToIgnoreCase(string left, string right)
+    internal static int JavaCompareToIgnoreCase(string left, string right)
     {
         int shared = Math.Min(left.Length, right.Length);
         for (int index = 0; index < shared; index++)
@@ -167,6 +165,12 @@ internal static class JavaLangStringBindings
         }
         return left.Length - right.Length;
     }
+
+    internal static string ReplaceLiteral(string value, string target, string replacement) =>
+        value.Replace(target, replacement, StringComparison.Ordinal);
+
+    private static GuestExceptionCarrier StringIndexOutOfBounds(int index) =>
+        new(GuestThrowableMetadata.Create("Ljava/lang/StringIndexOutOfBoundsException;", index.ToString(CultureInfo.InvariantCulture)));
 
     private static bool JavaRegionMatches(AndroidFrameworkState state, string left, bool ignoreCase, int toffset, string other, int ooffset, int length)
     {

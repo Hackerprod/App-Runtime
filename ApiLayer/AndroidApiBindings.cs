@@ -32,6 +32,8 @@ public static class AndroidApiBindings
 		AndroidApiRegistryBuilder builder = new AndroidApiRegistryBuilder();
 		JavaLangBindings.Register(builder, state);
 		JavaLangThreadBindings.Register(builder, state);
+		JavaLangStringBindings.Register(builder, state);
+		KotlinTextStringsKtBindings.Register(builder, state);
 		JavaUtilConcurrentExecutorBindings.Register(builder, state);
 		AndroidOsHandlerBindings.Register(builder, state);
 		RegisterVoid(builder, "Landroid/app/Activity;", "<init>", "()V");
@@ -79,7 +81,6 @@ public static class AndroidApiBindings
 		});
 		RegisterLogs(builder, state, logSink);
 		RegisterText(builder, state);
-		JavaLangStringBindings.Register(builder, state);
 		RegisterStringBuilder(builder, state);
 		RegisterColor(builder);
 		RegisterSystemClock(builder, state);
