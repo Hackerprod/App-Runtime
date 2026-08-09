@@ -118,7 +118,9 @@ public sealed class AndroidAppRuntime
                     services.ServiceLimits,
                     manifest.TargetSdkVersion,
                     services.Power,
-                    resources);
+                    resources,
+                    null,
+                    services.TextMeasurer);
                 var registry = AndroidApiBindings.CreateBuilder(frameworkState, services.LogSink).Build();
                 var interpreter = new DexInterpreter(dexSet, registry, apiSession: apiContext, gil: lane.Gil);
                 interpreter.StaticFieldMissDiagnostic = message => Console.Error.WriteLine("[DEX] " + message);
@@ -195,7 +197,9 @@ public sealed class AndroidAppRuntime
             services.ServiceLimits,
             manifest.TargetSdkVersion,
             services.Power,
-            resources);
+            resources,
+            null,
+            services.TextMeasurer);
         var registry = AndroidApiBindings.CreateBuilder(frameworkState, services.LogSink).Build();
         var interpreter = new DexInterpreter(dexSet, registry, apiSession: apiContext);
         interpreter.StaticFieldMissDiagnostic = message => Console.Error.WriteLine("[DEX] " + message);

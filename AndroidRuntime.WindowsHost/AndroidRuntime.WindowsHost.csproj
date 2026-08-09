@@ -15,4 +15,14 @@
   <ItemGroup>
     <InternalsVisibleTo Include="AndroidRuntime.WindowsHost.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- ViewRuntime native rasterizer: deploy the prebuilt dev DLL next to the
+         host executable. Path is resolved relative to this project directory
+         (repo root \ Ui\ViewRuntime\build\dev\Debug). The DLL is built by the
+         ViewRuntime CMake project (13/13 ctest passing); no C++ rebuild is
+         needed unless Ui\ViewRuntime\src changes. -->
+    <None Include="..\Ui\ViewRuntime\build\dev\Debug\viewruntime_core.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="viewruntime_core.dll" />
+  </ItemGroup>
 </Project>

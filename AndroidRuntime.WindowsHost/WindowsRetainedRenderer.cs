@@ -102,6 +102,8 @@ internal sealed partial class WindowsRetainedRenderer : IDisposable
     private long _renderedRevision;
     private long _stale;
     private string? _toast;
+    private ViewRuntimeSurface? _native;
+    private bool _nativeAvailable;
     private bool _disposed;
 
     internal long RenderedRevision { get { lock (_gate) return _renderedRevision; } }
@@ -161,17 +163,50 @@ internal sealed partial class WindowsRetainedRenderer : IDisposable
         }
     }
 
-    private static byte[] RenderDib(WindowsRetainedFrame? frame, int width, int height, float density, string? toast)
+    private byte[] RenderDib(WindowsRetainedFrame? frame, int width, int height, float density, string? toast)
     {
         int stride = checked(width * 4); var pixels = new byte[checked(stride * height)];
-        FillPixels(pixels, width, height, new AndroidRect(0, 0, width, height), new AndroidColor(255, 250, 250, 250));
-        if (frame is not null)
-            foreach (AndroidDrawCommand command in frame.Commands)
-                switch (command)
-                {
-                    case AndroidFillRectCommand fill: FillPixels(pixels, width, height, Scale(fill.Rect, density), fill.Color); break;
-                    case AndroidDrawTextCommand text: DrawPseudoText(pixels, width, height, Scale(text.Rect, density), text.Text, Math.Max(1, text.TextSizePixels * density), text.Color); break;
-                }
+        EnsureNativeSurface(width, height, density);
+
+        if (_nativeAvailable)
+        {
+            // Real ViewRuntime rasterizer: frame_begin, draw each command in
+            // display-list order, frame_end, then copy the finished BGRA buffer.
+            // Pixel byte order matches (ARGB8888 little-endian == BGRA), verified
+            // against pack_color + FillPixels; direct Marshal.Copy, no reorder.
+            _native!.BeginFrame();
+            if (frame is not null)
+                foreach (AndroidDrawCommand command in frame.Commands)
+                    switch (command)
+                    {
+                        case AndroidFillRectCommand fill:
+                            AndroidRect fr = Scale(fill.Rect, density);
+                            _native.DrawFillRect(fr.X, fr.Y, fr.Width, fr.Height, fill.Color, fill.ViewId);
+                            break;
+                        case AndroidDrawTextCommand text:
+                            AndroidRect tr = Scale(text.Rect, density);
+                            _native.DrawText(tr.X, tr.Y, tr.Width, tr.Height, text.Text, Math.Max(1, text.TextSizePixels * density), text.Color, text.ViewId);
+                            break;
+                    }
+            _native.EndFrame();
+            _native.CopyPixels(pixels);
+        }
+        else
+        {
+            // Native rasterizer unavailable (DLL missing/load failed): fall back to
+            // the original hand-rolled fake rasterizer so rendering still works.
+            FillPixels(pixels, width, height, new AndroidRect(0, 0, width, height), new AndroidColor(255, 250, 250, 250));
+            if (frame is not null)
+                foreach (AndroidDrawCommand command in frame.Commands)
+                    switch (command)
+                    {
+                        case AndroidFillRectCommand fill: FillPixels(pixels, width, height, Scale(fill.Rect, density), fill.Color); break;
+                        case AndroidDrawTextCommand text: DrawPseudoText(pixels, width, height, Scale(text.Rect, density), text.Text, Math.Max(1, text.TextSizePixels * density), text.Color); break;
+                    }
+        }
+
+        // Toast overlay stays host-owned pseudo-text (not part of the guest display
+        // list; low priority — routed through ViewRuntime in a future unit).
         if (!string.IsNullOrEmpty(toast))
         {
             float toastWidth = Math.Min(width - 32, Math.Max(120, toast.Length * 9 + 32));
@@ -180,6 +215,22 @@ internal sealed partial class WindowsRetainedRenderer : IDisposable
             DrawPseudoText(pixels, width, height, new(rect.X + 16, rect.Y + 8, rect.Width - 32, rect.Height - 16), toast, 16, new AndroidColor(255, 255, 255, 255));
         }
         return pixels;
+    }
+
+    /// <summary>Creates (once) and resizes the native ViewRuntime surface to the
+    /// current frame dimensions. Falls back to the fake rasterizer when the DLL
+    /// cannot load or the surface cannot be created.</summary>
+    private void EnsureNativeSurface(int width, int height, float density)
+    {
+        if (_nativeAvailable) { _native!.Resize(width, height, density); return; }
+        if (_native is not null) return; // already failed
+        try
+        {
+            _native = ViewRuntimeSurface.Create(ViewRuntimeNative.PickSystemFont());
+            if (_native is not null) { _native.Resize(width, height, density); _nativeAvailable = true; }
+        }
+        catch (DllNotFoundException) { _native = null; }
+        catch (BadImageFormatException) { _native = null; }
     }
 
     private static AndroidRect Scale(AndroidRect rect, float density) => new(rect.X * density, rect.Y * density, rect.Width * density, rect.Height * density);
@@ -209,7 +260,7 @@ internal sealed partial class WindowsRetainedRenderer : IDisposable
         }
     }
 
-    public void Dispose() { lock (_gate) { _disposed = true; _frame = null; _toast = null; } }
+    public void Dispose() { lock (_gate) { _disposed = true; _frame = null; _toast = null; _native?.Dispose(); _native = null; } }
 
     [StructLayout(LayoutKind.Sequential)] private struct BitmapInfoHeader
     {

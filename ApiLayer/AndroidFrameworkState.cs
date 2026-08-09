@@ -127,7 +127,8 @@ public sealed class AndroidFrameworkState : IDisposable
         int targetSdkVersion = 1,
         IAndroidPower? power = null,
         AndroidResourceResolver? resources = null,
-        AndroidUiLimits? uiLimits = null)
+        AndroidUiLimits? uiLimits = null,
+        AndroidRuntime.Core.Ui.IAndroidTextMeasurer? textMeasurer = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         SessionId = sessionId;
@@ -150,7 +151,7 @@ public sealed class AndroidFrameworkState : IDisposable
         ServiceLimits = serviceLimits ?? AndroidServiceLimits.Default; ServiceLimits.Validate();
         TargetSdkVersion = targetSdkVersion;
         Power = power ?? new UnavailableAndroidPower();
-        Ui = resources is null ? null : new AndroidUiSession(resources, uiLimits ?? new AndroidUiLimits(), PeerLimits.Views);
+        Ui = resources is null ? null : new AndroidUiSession(resources, uiLimits ?? new AndroidUiLimits(), PeerLimits.Views, textMeasurer);
         Resources = resources;
         StringBuilders = new AndroidPeerStore<StringBuilder>("StringBuilder", PeerLimits.StringBuilders);
         Bundles = new AndroidPeerStore<BundlePeer>("Bundle", PeerLimits.Bundles);

@@ -45,10 +45,22 @@ public static class Program
         var connectivity = new WindowsConnectivityAdapter();
         var logs = new ConsoleAndroidLogSink();
         var runtime = new AndroidAppRuntime();
+        // Host-injected ViewRuntime-backed text measurer: layout and paint then
+        // agree on real glyph widths. Falls back to the deterministic stub if the
+        // native DLL is unavailable.
+        using var textMeasurer = new ViewRuntimeTextMeasurer();
         await using var hosted = await runtime.LaunchSessionAsync(
             traceOutput.ApkStream,
-            new AndroidRuntimeServices(factory, logs, traceCapacity: 4096, clock: new WindowsAndroidClock(), capabilityPolicy: new AndroidCapabilityPolicy(options.Grants), clipboard: clipboard, connectivity: connectivity, power: new WindowsPowerAdapter()));
+            new AndroidRuntimeServices(factory, logs, traceCapacity: 4096, clock: new WindowsAndroidClock(), capabilityPolicy: new AndroidCapabilityPolicy(options.Grants), clipboard: clipboard, connectivity: connectivity, power: new WindowsPowerAdapter(), textMeasurer: textMeasurer));
         Console.WriteLine($"READY hwnd={hosted.Window.Handle} title={hosted.Window.Title}");
+
+        if (options.CaptureFramePath is string capturePath)
+        {
+            // Wait for at least one real rendered frame, then write it as a BMP.
+            WindowsFrameCapture capture = await WaitForRenderedFrameAsync(hosted.Window, TimeSpan.FromSeconds(15)).ConfigureAwait(false);
+            BmpFrameWriter.Write(capturePath, capture);
+            Console.WriteLine($"CAPTURED {capturePath} {capture.Width}x{capture.Height} rev={capture.Revision} sha={capture.Sha256}");
+        }
 
         if (options.AutoCloseMilliseconds is int delay)
         {
@@ -67,15 +79,32 @@ public static class Program
         return 0;
     }
 
+    private static async Task<WindowsFrameCapture> WaitForRenderedFrameAsync(IActivityWindow window, TimeSpan timeout)
+    {
+        // The real WPF window is a WpfActivityWindow (the factory only creates those);
+        // poll its surface until a frame with a non-trivial revision has rendered.
+        if (window is not WpfActivityWindow wpf)
+            throw new ArgumentException("Capture requires the WpfActivityWindow host.", nameof(window));
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            WindowsFrameCapture capture = wpf.CaptureSurface();
+            if (capture.Revision > 0) return capture;
+            await Task.Delay(100).ConfigureAwait(false);
+        }
+        throw new TimeoutException($"No rendered frame within {timeout.TotalSeconds:0} seconds.");
+    }
+
     private static HostOptions Parse(string[] args)
     {
         if (args.Length == 0)
-            throw new ArgumentException("Usage: AndroidRuntime.WindowsHost <apk> [--auto-close-ms <100..600000>] [--trace <path>] [--grant-clipboard-read] [--grant-clipboard-write] [--grant-network-state] [--grant-power]");
+            throw new ArgumentException("Usage: AndroidRuntime.WindowsHost <apk> [--auto-close-ms <100..600000>] [--trace <path>] [--capture-frame <path.bmp>] [--grant-clipboard-read] [--grant-clipboard-write] [--grant-network-state] [--grant-power]");
         string apkPath = Path.GetFullPath(args[0]);
         if (!File.Exists(apkPath) || !string.Equals(Path.GetExtension(apkPath), ".apk", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("APK path does not exist or is not an .apk file: " + apkPath);
         int? autoClose = null;
         string? tracePath = null;
+        string? captureFramePath = null;
         var grants = new HashSet<AndroidCapability>();
         for (int index = 1; index < args.Length; index++)
         {
@@ -90,6 +119,13 @@ public static class Program
                 tracePath = Path.GetFullPath(args[++index]);
                 continue;
             }
+            if (args[index] == "--capture-frame" && index + 1 < args.Length)
+            {
+                captureFramePath = Path.GetFullPath(args[++index]);
+                if (!string.Equals(Path.GetExtension(captureFramePath), ".bmp", StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("--capture-frame requires a .bmp path (BGRA32 top-down BMP, no extra dependency).");
+                continue;
+            }
             AndroidCapability? grant = args[index] switch { "--grant-clipboard-read" => AndroidCapability.ClipboardRead, "--grant-clipboard-write" => AndroidCapability.ClipboardWrite, "--grant-network-state" => AndroidCapability.NetworkState, "--grant-power" => AndroidCapability.PowerRead, _ => null };
             if (grant.HasValue)
             {
@@ -100,7 +136,9 @@ public static class Program
         }
         if (tracePath is not null && PathsAlias(apkPath, tracePath))
             throw new ArgumentException("Trace output path must not alias the input APK path.");
-        return new HostOptions(apkPath, autoClose, tracePath, grants.ToArray());
+        if (captureFramePath is not null && PathsAlias(apkPath, captureFramePath))
+            throw new ArgumentException("Capture output path must not alias the input APK path.");
+        return new HostOptions(apkPath, autoClose, tracePath, captureFramePath, grants.ToArray());
     }
 
     private static bool PathsAlias(string left, string right)
@@ -139,7 +177,7 @@ public static class Program
         output.Flush(flushToDisk: true);
     }
 
-    private sealed record HostOptions(string ApkPath, int? AutoCloseMilliseconds, string? TracePath, IReadOnlyCollection<AndroidCapability> Grants);
+    private sealed record HostOptions(string ApkPath, int? AutoCloseMilliseconds, string? TracePath, string? CaptureFramePath, IReadOnlyCollection<AndroidCapability> Grants);
 }
 
 internal sealed class TraceOutputLease : IDisposable

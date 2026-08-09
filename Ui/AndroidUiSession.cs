@@ -13,6 +13,7 @@ internal sealed class AndroidUiSession : IDisposable
     private readonly AndroidResourceResolver _resources;
     private readonly AndroidUiLimits _limits;
     private readonly int _peerLimit;
+    private readonly IAndroidTextMeasurer? _textMeasurer;
     private readonly Dictionary<DexObject, AndroidViewNode> _guestToNode = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<AndroidViewNode, DexObject> _nodeToGuest = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<AndroidViewNode, DexObject?> _listeners = new(ReferenceEqualityComparer.Instance);
@@ -25,11 +26,12 @@ internal sealed class AndroidUiSession : IDisposable
     private long _callbacks;
     private int _lastCallbackThreadId;
 
-    internal AndroidUiSession(AndroidResourceResolver resources, AndroidUiLimits limits, int peerLimit)
+    internal AndroidUiSession(AndroidResourceResolver resources, AndroidUiLimits limits, int peerLimit, IAndroidTextMeasurer? textMeasurer = null)
     {
         _resources = resources;
         _limits = limits;
         _peerLimit = peerLimit;
+        _textMeasurer = textMeasurer;
     }
 
     internal int PeerCount => _guestToNode.Count;
@@ -60,7 +62,10 @@ internal sealed class AndroidUiSession : IDisposable
             guestToNode.Add(guest, node); nodeToGuest.Add(node, guest); listeners.Add(node, null);
             foreach (AndroidViewNode child in node.Children) Walk(child);
         }
-        var scene = new AndroidSceneHost(root, new DeterministicAndroidTextMeasurer(), new RecordingAndroidRenderBackend(), _limits);
+        // Layout measurement: use the host-injected ViewRuntime-backed measurer
+        // when supplied (so layout and paint agree on real glyph widths),
+        // falling back to the deterministic stub otherwise.
+        var scene = new AndroidSceneHost(root, _textMeasurer ?? new DeterministicAndroidTextMeasurer(), new RecordingAndroidRenderBackend(), _limits);
         _scene?.Dispose();
         _guestToNode.Clear(); foreach (var pair in guestToNode) _guestToNode.Add(pair.Key, pair.Value);
         _nodeToGuest.Clear(); foreach (var pair in nodeToGuest) _nodeToGuest.Add(pair.Key, pair.Value);
