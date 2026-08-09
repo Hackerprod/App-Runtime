@@ -11,7 +11,7 @@ namespace AndroidRuntime.Core.ApiLayer;
 
 public sealed record AndroidPeerLimits
 {
-    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024, int maxBoxed = 1024, int maxMapEntries = 1024, int maxMapViews = 256)
+    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024, int maxBoxed = 1024, int maxMapEntries = 1024, int maxMapViews = 256, int maxLazies = 256)
     {
         StringBuilders = maxStringBuilders;
         Bundles = maxBundles;
@@ -37,6 +37,7 @@ public sealed record AndroidPeerLimits
         Boxed = maxBoxed;
         MapEntries = maxMapEntries;
         MapViews = maxMapViews;
+        Lazies = maxLazies;
         Validate();
     }
 
@@ -65,10 +66,11 @@ public sealed record AndroidPeerLimits
     public int Boxed { get; }
     public int MapEntries { get; }
     public int MapViews { get; }
+    public int Lazies { get; }
 
     public void Validate()
     {
-        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0 || Boxed <= 0 || MapEntries <= 0 || MapViews <= 0)
+        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0 || Boxed <= 0 || MapEntries <= 0 || MapViews <= 0 || Lazies <= 0)
             throw new ArgumentOutOfRangeException(nameof(AndroidPeerLimits), "Peer limits must be positive.");
     }
 }
@@ -158,6 +160,7 @@ public sealed class AndroidFrameworkState : IDisposable
         Boxed = new AndroidPeerStore<BoxedPeer>("Boxed", PeerLimits.Boxed);
         MapEntries = new AndroidPeerStore<MapEntryPeer>("MapEntry", PeerLimits.MapEntries);
         MapViews = new AndroidPeerStore<HashSet<object?>>("MapView", PeerLimits.MapViews);
+        Lazies = new AndroidPeerStore<LazyPeer>("Lazy", PeerLimits.Lazies);
         ApplicationContext = new DexObject("Landroid/app/Application;");
         LauncherIntent = new DexObject("Landroid/content/Intent;");
         Intents.Add(LauncherIntent, new IntentPeer { Action = "android.intent.action.MAIN" });
@@ -212,6 +215,7 @@ public sealed class AndroidFrameworkState : IDisposable
     internal AndroidPeerStore<BoxedPeer> Boxed { get; }
     internal AndroidPeerStore<MapEntryPeer> MapEntries { get; }
     internal AndroidPeerStore<HashSet<object?>> MapViews { get; }
+    internal AndroidPeerStore<LazyPeer> Lazies { get; }
     /// <summary>The session's GIL: shared by the interpreter and every binding that
     /// must release it around real blocking (sleep/join/monitor-enter/class-init
     /// wait). AndroidAppRuntime replaces this with the execution lane's GIL.</summary>
@@ -502,6 +506,7 @@ public sealed class AndroidFrameworkState : IDisposable
         Boxed.Clear();
         MapEntries.Clear();
         MapViews.Clear();
+        Lazies.Clear();
         Activity = null;
         SystemServices?.Dispose();
     }
@@ -793,6 +798,21 @@ internal sealed class BoxedPeer
 /// captured when the view was created. Read-only (getKey/getValue); setValue is
 /// not bound — the view is snapshot-only, no write-through to the backing map.</summary>
 internal sealed record MapEntryPeer(object? Key, object? Value);
+
+/// <summary>
+/// State for a guest kotlin.Lazy delegate: the Function0 initializer and the
+/// computed value. No synchronization is needed under this runtime — the GIL
+/// serializes all guest bytecode execution, so a plain "compute once and cache"
+/// is correct under all three real LazyThreadSafetyMode values (SYNCHRONIZED/
+/// PUBLICATION/NONE): no observable difference exists under this execution
+/// model (same reasoning as monitor-enter/AtomicReference).
+/// </summary>
+internal sealed class LazyPeer
+{
+    internal required DexObject Function0 { get; init; }
+    internal bool Computed { get; set; }
+    internal object? CachedValue { get; set; }
+}
 
 /// <summary>
 /// Completion/state for a guest java.util.concurrent.Future. State transitions:

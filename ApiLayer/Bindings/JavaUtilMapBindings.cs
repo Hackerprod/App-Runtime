@@ -144,7 +144,7 @@ internal static class JavaUtilMapBindings
             entries[key!] = value!;
             return previous ?? null!;
         }
-        return state.HashMaps.Get(dex).Put(key, value);
+        return state.HashMaps.Get(dex).Put(key, value) ?? null!;
     }
 
     private static object GetValue(AndroidFrameworkState state, object receiver, object? key)
@@ -216,7 +216,8 @@ internal static class JavaUtilMapBindings
         object? found = dex.TypeDescriptor == WeakHashMap
             ? (state.WeakHashMaps.Get(dex).Entries.TryGetValue(key!, out var weak) ? weak : null)
             : state.HashMaps.Get(dex).Get(key);
-        return found ?? defaultValue ?? null!;
+        object result = found ?? defaultValue ?? new object();
+        return result;
     }
 
     private static bool RemoveIfValue(AndroidFrameworkState state, object receiver, object? key, object? expected)

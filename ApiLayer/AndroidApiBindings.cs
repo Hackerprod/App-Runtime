@@ -36,6 +36,7 @@ public static class AndroidApiBindings
 		JavaLangReflectBindings.Register(builder, state);
 		JavaLangBoxingBindings.Register(builder, state);
 		KotlinTextStringsKtBindings.Register(builder, state);
+		KotlinLazyBindings.Register(builder, state);
 		JavaUtilConcurrentExecutorBindings.Register(builder, state);
 		AndroidOsHandlerBindings.Register(builder, state);
 		RegisterVoid(builder, "Landroid/app/Activity;", "<init>", "()V");
