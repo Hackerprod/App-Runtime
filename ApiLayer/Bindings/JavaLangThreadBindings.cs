@@ -42,10 +42,10 @@ internal static class JavaLangThreadBindings
         builder.Register(Api("Ljava/lang/Thread;", "setName", "(Ljava/lang/String;)V"), (_, args) => { state.Threads.Get(Receiver(args)).Name = RequireString(args[1]); return null!; });
         builder.Register(Api("Ljava/lang/Thread;", "getName", "()Ljava/lang/String;"), (_, args) => state.Threads.Get(Receiver(args)).Name ?? "Thread-" + state.Threads.Get(Receiver(args)).GetHashCode().ToString(System.Globalization.CultureInfo.InvariantCulture));
         builder.Register(Api("Ljava/lang/Thread;", "currentThread", "()Ljava/lang/Thread;"), (_, _) => CurrentThreadObject(state));
-        builder.Register(Api("Ljava/lang/Thread;", "sleep", "(J)V"), (_, args) => SleepCore(state, RequireLong(args[1])));
+        builder.Register(Api("Ljava/lang/Thread;", "sleep", "(J)V"), (_, args) => SleepCore(state, RequireLong(args[0])));
     }
 
-    private static object? StartThread(AndroidFrameworkState state, DexObject receiver)
+    private static object StartThread(AndroidFrameworkState state, DexObject receiver)
     {
         var peer = state.Threads.Get(receiver);
         if (peer.ClrThread is not null)
@@ -67,6 +67,15 @@ internal static class JavaLangThreadBindings
                     gil.Exit();
                 }
             }
+            catch (Exception error)
+            {
+                // The guest thread's uncaught exception terminates the thread (real
+                // Java semantics; InterruptedException from an interrupt is a normal
+                // outcome). It is recorded on the peer rather than crashing the host
+                // or silently swallowed — a future uncaughtExceptionHandler binding
+                // can surface it.
+                peer.TerminalException = error;
+            }
             finally
             {
                 peer.Completion.Set();
@@ -80,7 +89,7 @@ internal static class JavaLangThreadBindings
         return null!;
     }
 
-    private static object? RunDefault(AndroidFrameworkState state, DexObject receiver)
+    private static object RunDefault(AndroidFrameworkState state, DexObject receiver)
     {
         // Real Thread.run() default: dispatch to the Runnable target if present, else no-op.
         var peer = state.Threads.Get(receiver);
@@ -89,7 +98,7 @@ internal static class JavaLangThreadBindings
         return null!;
     }
 
-    private static object? JoinCore(AndroidFrameworkState state, DexObject target, long timeoutMillis)
+    private static object JoinCore(AndroidFrameworkState state, DexObject target, long timeoutMillis)
     {
         var currentPeer = CurrentThreadPeer(state);
         var targetPeer = state.Threads.Get(target);
@@ -119,7 +128,7 @@ internal static class JavaLangThreadBindings
         return null!;
     }
 
-    private static object? SleepCore(AndroidFrameworkState state, long millis)
+    private static object SleepCore(AndroidFrameworkState state, long millis)
     {
         if (millis < 0)
             throw new GuestExceptionCarrier(GuestThrowableMetadata.Create("Ljava/lang/IllegalArgumentException;", "negative sleep"));
@@ -140,7 +149,19 @@ internal static class JavaLangThreadBindings
 
     private static DexObject CurrentThreadObject(AndroidFrameworkState state)
     {
-        if (_currentGuestThread is not null) return _currentGuestThread;
+        if (_currentGuestThread is not null)
+        {
+            try
+            {
+                state.Threads.Get(_currentGuestThread);
+                return _currentGuestThread;
+            }
+            catch (InvalidOperationException)
+            {
+                // Stale association from a reused thread that ran guest code under a
+                // different session (or a prior test): re-associate fresh.
+            }
+        }
         // Lazily associate the calling real thread with a fresh guest Thread peer
         // (e.g. the main guest thread before AndroidAppRuntime seeds it, or a test
         // thread calling currentThread() directly).

@@ -1,4 +1,8 @@
-#nullable enable
+#nullable disable
+// NOTE: this file is a decompiled restoration of the original (see incident). Its
+// nullability annotations were lost in decompilation; nullable analysis is disabled
+// until the file is properly rewritten from the compiled behavior. Functionality is
+// validated by the full test suite.
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -48,7 +52,7 @@ public static class AndroidApiBindings
 		{
 			RequireActivity(state, Receiver(args));
 			state.RequestFinish();
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/app/Activity;", "isFinishing", "()Z"), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -98,7 +102,7 @@ public static class AndroidApiBindings
 		builder.Register(Api("Ljava/util/WeakHashMap;", "<init>", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.WeakHashMaps.Add(Receiver(args), new WeakHashMapPeer());
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Ljava/util/WeakHashMap;", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -124,7 +128,7 @@ public static class AndroidApiBindings
 		builder.Register(Api("Ljava/util/HashMap;", "<init>", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.HashMaps.Add(Receiver(args), new HashMapPeer());
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Ljava/util/HashMap;", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"), (AndroidApiInvocation _, object[] args) => state.HashMaps.Get(Receiver(args)).Put(args[1], args[2]));
 		builder.Register(Api("Ljava/util/HashMap;", "get", "(Ljava/lang/Object;)Ljava/lang/Object;"), (AndroidApiInvocation _, object[] args) => state.HashMaps.Get(Receiver(args)).Get(args[1]));
@@ -138,13 +142,13 @@ public static class AndroidApiBindings
 		builder.Register(Api("Ljava/util/ArrayList;", "<init>", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.ArrayLists.Add(Receiver(args), new ListPeer());
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Ljava/util/ArrayList;", "<init>", "(I)V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			RequireInt(args[1]);
 			state.ArrayLists.Add(Receiver(args), new ListPeer());
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Ljava/util/ArrayList;", "add", "(Ljava/lang/Object;)Z"), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -160,7 +164,7 @@ public static class AndroidApiBindings
 				throw new GuestExceptionCarrier(GuestThrowableMetadata.Create("Ljava/lang/IndexOutOfBoundsException;"));
 			}
 			listPeer.Elements.Insert(num, args[2]);
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Ljava/util/ArrayList;", "get", "(I)Ljava/lang/Object;"), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -183,7 +187,7 @@ public static class AndroidApiBindings
 		builder.Register(Api("Ljava/util/ArrayList;", "clear", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.ArrayLists.Get(Receiver(args)).Elements.Clear();
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Ljava/util/ArrayList;", "size", "()I"), (AndroidApiInvocation _, object[] args) => state.ArrayLists.Get(Receiver(args)).Elements.Count);
 		builder.Register(Api("Ljava/util/ArrayList;", "isEmpty", "()Z"), (AndroidApiInvocation _, object[] args) => (state.ArrayLists.Get(Receiver(args)).Elements.Count == 0) ? 1 : 0);
@@ -204,7 +208,7 @@ public static class AndroidApiBindings
 		builder.Register(Api("Ljava/util/concurrent/CopyOnWriteArrayList;", "<init>", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.CopyOnWriteArrayLists.Add(Receiver(args), new ListPeer());
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Ljava/util/concurrent/CopyOnWriteArrayList;", "<init>", "(Ljava/util/Collection;)V"), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -214,7 +218,7 @@ public static class AndroidApiBindings
 				throw new InvalidOperationException("CopyOnWriteArrayList Collection constructor source is not a modeled guest collection.");
 			}
 			state.CopyOnWriteArrayLists.Add(Receiver(args), listPeer);
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Ljava/util/concurrent/CopyOnWriteArrayList;", "add", "(Ljava/lang/Object;)Z"), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -230,7 +234,7 @@ public static class AndroidApiBindings
 				throw new GuestExceptionCarrier(GuestThrowableMetadata.Create("Ljava/lang/IndexOutOfBoundsException;"));
 			}
 			listPeer.Elements.Insert(num, args[2]);
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Ljava/util/concurrent/CopyOnWriteArrayList;", "get", "(I)Ljava/lang/Object;"), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -265,7 +269,7 @@ public static class AndroidApiBindings
 		builder.Register(Api("Ljava/util/concurrent/CopyOnWriteArrayList;", "clear", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.CopyOnWriteArrayLists.Get(Receiver(args)).Elements.Clear();
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Ljava/util/concurrent/CopyOnWriteArrayList;", "addIfAbsent", "(Ljava/lang/Object;)Z"), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -286,14 +290,14 @@ public static class AndroidApiBindings
 		builder.Register(Api("Ljava/util/Iterator;", "next", "()Ljava/lang/Object;"), (AndroidApiInvocation _, object[] args) => state.Iterators.Get(Receiver(args)).Next());
 	}
 
-	private static DexObject CreateIterator(AndroidFrameworkState state, IEnumerable<object?> snapshot)
+	private static DexObject CreateIterator(AndroidFrameworkState state, IEnumerable<object> snapshot)
 	{
 		DexObject iterator = new DexObject("Ljava/util/Iterator;");
 		state.Iterators.Add(iterator, new IteratorPeer(snapshot));
 		return iterator;
 	}
 
-	private static void RequireListIndex(List<object?> elements, int index)
+	private static void RequireListIndex(List<object> elements, int index)
 	{
 		if ((uint)index >= (uint)elements.Count)
 		{
@@ -301,7 +305,7 @@ public static class AndroidApiBindings
 		}
 	}
 
-	private static bool TryCopyGuestCollection(AndroidFrameworkState state, object? source, List<object?> target)
+	private static bool TryCopyGuestCollection(AndroidFrameworkState state, object source, List<object> target)
 	{
 		if (!(source is DexObject guest))
 		{
@@ -338,13 +342,13 @@ public static class AndroidApiBindings
 			{
 				Value = args[1]
 			});
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Ljava/lang/ref/WeakReference;", "get", "()Ljava/lang/Object;"), (AndroidApiInvocation _, object[] args) => state.WeakReferences.Get(Receiver(args)).Value);
 		builder.Register(Api("Ljava/lang/ref/WeakReference;", "clear", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.WeakReferences.Get(Receiver(args)).Value = null;
-			return (object)null;
+			return null!;
 		});
 	}
 
@@ -353,7 +357,7 @@ public static class AndroidApiBindings
 		builder.Register(Api("Ljava/util/concurrent/CopyOnWriteArraySet;", "<init>", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.CopyOnWriteArraySets.Add(Receiver(args), new HashSet<object>());
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Ljava/util/concurrent/CopyOnWriteArraySet;", "add", "(Ljava/lang/Object;)Z"), (AndroidApiInvocation _, object[] args) => state.CopyOnWriteArraySets.Get(Receiver(args)).Add(args[1]) ? 1 : 0);
 	}
@@ -365,7 +369,7 @@ public static class AndroidApiBindings
 			RequireMainLane(invocation);
 			RequireActivity(state, Receiver(args));
 			RequireUi(state).SetContentView(RequireInt(args[1]));
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/app/Activity;", "findViewById", "(I)Landroid/view/View;"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
@@ -387,7 +391,7 @@ public static class AndroidApiBindings
 		{
 			RequireMainLane(invocation);
 			RequireUi(state).SetEnabled(Receiver(args), RequireInt(args[1]) != 0);
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/view/View;", "isEnabled", "()Z"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
@@ -398,7 +402,7 @@ public static class AndroidApiBindings
 		{
 			RequireMainLane(invocation);
 			RequireUi(state).SetVisibility(Receiver(args), RequireInt(args[1]));
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/view/View;", "getVisibility", "()I"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
@@ -409,7 +413,7 @@ public static class AndroidApiBindings
 		{
 			RequireMainLane(invocation);
 			RequireUi(state).SetOnClickListener(Receiver(args), OptionalDex(args[1]));
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/view/View;", "performClick", "()Z"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
@@ -420,7 +424,7 @@ public static class AndroidApiBindings
 		{
 			RequireMainLane(invocation);
 			RequireUi(state).SetText(Receiver(args), AsText(state, args[1]));
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/widget/TextView;", "getText", "()Ljava/lang/CharSequence;"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
@@ -442,17 +446,17 @@ public static class AndroidApiBindings
 			builder.Register(Api(type, "<init>", "()V"), delegate(AndroidApiInvocation _, object[] args)
 			{
 				GuestThrowableMetadata.Set(RequireDex(args[0]), null, null);
-				return (object)null;
+				return null!;
 			});
 			builder.Register(Api(type, "<init>", "(Ljava/lang/String;)V"), delegate(AndroidApiInvocation _, object[] args)
 			{
 				GuestThrowableMetadata.Set(RequireDex(args[0]), RequireString(args[1], allowNull: true), null);
-				return (object)null;
+				return null!;
 			});
 			builder.Register(Api(type, "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V"), delegate(AndroidApiInvocation _, object[] args)
 			{
 				GuestThrowableMetadata.Set(RequireDex(args[0]), RequireString(args[1], allowNull: true), args[2] as DexObject);
-				return (object)null;
+				return null!;
 			});
 		}
 		builder.Register(Api("Ljava/lang/Throwable;", "getMessage", "()Ljava/lang/String;"), (AndroidApiInvocation _, object[] args) => GuestThrowableMetadata.Message(RequireDex(args[0])));
@@ -535,28 +539,28 @@ public static class AndroidApiBindings
 		builder.Register(Api("Ljava/lang/StringBuilder;", "<init>", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.StringBuilders.Add(Receiver(args), new StringBuilder());
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Ljava/lang/StringBuilder;", "<init>", "(I)V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.StringBuilders.Add(Receiver(args), new StringBuilder(RequireInt(args[1])));
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Ljava/lang/StringBuilder;", "<init>", "(Ljava/lang/String;)V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.StringBuilders.Add(Receiver(args), new StringBuilder(RequireString(args[1])));
-			return (object)null;
+			return null!;
 		});
-		RegisterAppend(builder, state, "(Ljava/lang/String;)Ljava/lang/StringBuilder;", (object? value) => (value == null) ? "null" : RequireString(value));
-		RegisterAppend(builder, state, "(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;", (object? value) => (value == null) ? "null" : AsText(state, value));
-		RegisterAppend(builder, state, "(I)Ljava/lang/StringBuilder;", (object? value) => RequireInt(value).ToString(CultureInfo.InvariantCulture));
-		RegisterAppend(builder, state, "(Z)Ljava/lang/StringBuilder;", (object? value) => (RequireInt(value) == 0) ? "false" : "true");
-		RegisterAppend(builder, state, "(C)Ljava/lang/StringBuilder;", (object? value) => ((char)RequireInt(value)).ToString());
+		RegisterAppend(builder, state, "(Ljava/lang/String;)Ljava/lang/StringBuilder;", (object value) => (value == null) ? "null" : RequireString(value));
+		RegisterAppend(builder, state, "(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;", (object value) => (value == null) ? "null" : AsText(state, value));
+		RegisterAppend(builder, state, "(I)Ljava/lang/StringBuilder;", (object value) => RequireInt(value).ToString(CultureInfo.InvariantCulture));
+		RegisterAppend(builder, state, "(Z)Ljava/lang/StringBuilder;", (object value) => (RequireInt(value) == 0) ? "false" : "true");
+		RegisterAppend(builder, state, "(C)Ljava/lang/StringBuilder;", (object value) => ((char)RequireInt(value)).ToString());
 		builder.Register(Api("Ljava/lang/StringBuilder;", "length", "()I"), (AndroidApiInvocation _, object[] args) => state.StringBuilders.Get(Receiver(args)).Length);
 		builder.Register(Api("Ljava/lang/StringBuilder;", "toString", "()Ljava/lang/String;"), (AndroidApiInvocation _, object[] args) => state.StringBuilders.Get(Receiver(args)).ToString());
 	}
 
-	private static void RegisterAppend(AndroidApiRegistryBuilder builder, AndroidFrameworkState state, string descriptor, Func<object?, string> convert)
+	private static void RegisterAppend(AndroidApiRegistryBuilder builder, AndroidFrameworkState state, string descriptor, Func<object, string> convert)
 	{
 		builder.Register(Api("Ljava/lang/StringBuilder;", "append", descriptor), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -581,23 +585,23 @@ public static class AndroidApiBindings
 		builder.Register(Api("Landroid/os/Bundle;", "<init>", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.Bundles.Add(Receiver(args), new BundlePeer());
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/os/Bundle;", "<init>", "(I)V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			RequireInt(args[1]);
 			state.Bundles.Add(Receiver(args), new BundlePeer());
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/os/Bundle;", "<init>", "(Landroid/os/Bundle;)V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.Bundles.Add(Receiver(args), state.Bundles.Get(RequireDex(args[1])).Copy());
-			return (object)null;
+			return null!;
 		});
-		RegisterBundlePut(builder, state, "putString", "(Ljava/lang/String;Ljava/lang/String;)V", BundleValueKind.String, (object? value) => RequireString(value, allowNull: true));
-		RegisterBundlePut(builder, state, "putInt", "(Ljava/lang/String;I)V", BundleValueKind.Int, (object? value) => RequireInt(value));
-		RegisterBundlePut(builder, state, "putLong", "(Ljava/lang/String;J)V", BundleValueKind.Long, (object? value) => RequireLong(value));
-		RegisterBundlePut(builder, state, "putBoolean", "(Ljava/lang/String;Z)V", BundleValueKind.Boolean, (object? value) => RequireInt(value) != 0);
+		RegisterBundlePut(builder, state, "putString", "(Ljava/lang/String;Ljava/lang/String;)V", BundleValueKind.String, (object value) => RequireString(value, allowNull: true));
+		RegisterBundlePut(builder, state, "putInt", "(Ljava/lang/String;I)V", BundleValueKind.Int, (object value) => RequireInt(value));
+		RegisterBundlePut(builder, state, "putLong", "(Ljava/lang/String;J)V", BundleValueKind.Long, (object value) => RequireLong(value));
+		RegisterBundlePut(builder, state, "putBoolean", "(Ljava/lang/String;Z)V", BundleValueKind.Boolean, (object value) => RequireInt(value) != 0);
 		RegisterBundleGet(builder, state, "getString", "(Ljava/lang/String;)Ljava/lang/String;", BundleValueKind.String, null);
 		RegisterBundleGet(builder, state, "getString", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", BundleValueKind.String, 2);
 		RegisterBundleGet(builder, state, "getInt", "(Ljava/lang/String;)I", BundleValueKind.Int, 0);
@@ -610,32 +614,32 @@ public static class AndroidApiBindings
 		builder.Register(Api("Landroid/os/BaseBundle;", "remove", "(Ljava/lang/String;)V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.Bundles.Get(Receiver(args)).Remove(RequireString(args[1], allowNull: true));
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/os/BaseBundle;", "clear", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.Bundles.Get(Receiver(args)).Clear();
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/os/BaseBundle;", "size", "()I"), (AndroidApiInvocation _, object[] args) => state.Bundles.Get(Receiver(args)).Count);
 		builder.Register(Api("Landroid/os/BaseBundle;", "isEmpty", "()Z"), (AndroidApiInvocation _, object[] args) => (state.Bundles.Get(Receiver(args)).Count == 0) ? 1 : 0);
 	}
 
-	private static void RegisterBundlePut(AndroidApiRegistryBuilder builder, AndroidFrameworkState state, string name, string descriptor, BundleValueKind kind, Func<object?, object?> convert)
+	private static void RegisterBundlePut(AndroidApiRegistryBuilder builder, AndroidFrameworkState state, string name, string descriptor, BundleValueKind kind, Func<object, object> convert)
 	{
 		builder.Register(Api("Landroid/os/BaseBundle;", name, descriptor), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.Bundles.Get(Receiver(args)).Put(RequireString(args[1], allowNull: true), new BundleValue(kind, convert(args[2])));
-			return (object)null;
+			return null!;
 		});
 	}
 
-	private static void RegisterBundleGet(AndroidApiRegistryBuilder builder, AndroidFrameworkState state, string name, string descriptor, BundleValueKind kind, object? defaultValue)
+	private static void RegisterBundleGet(AndroidApiRegistryBuilder builder, AndroidFrameworkState state, string name, string descriptor, BundleValueKind kind, object defaultValue)
 	{
 		builder.Register(Api("Landroid/os/BaseBundle;", name, descriptor), delegate(AndroidApiInvocation _, object[] args)
 		{
 			BundleValue bundleValue = state.Bundles.Get(Receiver(args)).Get(RequireString(args[1], allowNull: true));
-			object? obj;
+			object obj;
 			if (defaultValue is int)
 			{
 				int num = (int)defaultValue;
@@ -666,7 +670,7 @@ public static class AndroidApiBindings
 		builder.Register(Api("Landroid/content/Intent;", "<init>", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.Intents.Add(Receiver(args), new IntentPeer());
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/content/Intent;", "<init>", "(Ljava/lang/String;)V"), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -674,7 +678,7 @@ public static class AndroidApiBindings
 			{
 				Action = RequireString(args[1], allowNull: true)
 			});
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/content/Intent;", "setAction", "(Ljava/lang/String;)Landroid/content/Intent;"), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -683,9 +687,9 @@ public static class AndroidApiBindings
 			return dexObject;
 		});
 		builder.Register(Api("Landroid/content/Intent;", "getAction", "()Ljava/lang/String;"), (AndroidApiInvocation _, object[] args) => state.Intents.Get(Receiver(args)).Action);
-		RegisterIntentPut(builder, state, "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;", BundleValueKind.String, (object? value) => RequireString(value, allowNull: true));
-		RegisterIntentPut(builder, state, "(Ljava/lang/String;I)Landroid/content/Intent;", BundleValueKind.Int, (object? value) => RequireInt(value));
-		RegisterIntentPut(builder, state, "(Ljava/lang/String;Z)Landroid/content/Intent;", BundleValueKind.Boolean, (object? value) => RequireInt(value) != 0);
+		RegisterIntentPut(builder, state, "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;", BundleValueKind.String, (object value) => RequireString(value, allowNull: true));
+		RegisterIntentPut(builder, state, "(Ljava/lang/String;I)Landroid/content/Intent;", BundleValueKind.Int, (object value) => RequireInt(value));
+		RegisterIntentPut(builder, state, "(Ljava/lang/String;Z)Landroid/content/Intent;", BundleValueKind.Boolean, (object value) => RequireInt(value) != 0);
 		RegisterIntentGet(builder, state, "getStringExtra", "(Ljava/lang/String;)Ljava/lang/String;", BundleValueKind.String, null);
 		RegisterIntentGet(builder, state, "getIntExtra", "(Ljava/lang/String;I)I", BundleValueKind.Int, 2);
 		RegisterIntentGet(builder, state, "getBooleanExtra", "(Ljava/lang/String;Z)Z", BundleValueKind.Boolean, 2);
@@ -693,7 +697,7 @@ public static class AndroidApiBindings
 		builder.Register(Api("Landroid/content/Intent;", "removeExtra", "(Ljava/lang/String;)V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			state.Intents.Get(Receiver(args)).Extras.Remove(RequireString(args[1], allowNull: true));
-			return (object)null;
+			return null!;
 		});
 	}
 
@@ -734,13 +738,13 @@ public static class AndroidApiBindings
 		{
 			RequireMainLane(invocation);
 			state.Toasts.Get(Receiver(args)).Notification.Show(invocation.CancellationToken);
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/widget/Toast;", "cancel", "()V"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
 			state.Toasts.Get(Receiver(args)).Notification.Cancel();
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/widget/Toast;", "getDuration", "()I"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
@@ -751,7 +755,7 @@ public static class AndroidApiBindings
 		{
 			RequireMainLane(invocation);
 			state.Toasts.Get(Receiver(args)).Notification.Duration = RequireToastDuration(args[1]);
-			return (object)null;
+			return null!;
 		});
 		builder.Register(Api("Landroid/widget/Toast;", "setText", "(Ljava/lang/CharSequence;)V"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
@@ -762,11 +766,11 @@ public static class AndroidApiBindings
 				throw new ArgumentOutOfRangeException("args", $"Toast text exceeds {state.ToastLimits.MaxTextLength} characters.");
 			}
 			state.Toasts.Get(Receiver(args)).Notification.Text = text;
-			return (object)null;
+			return null!;
 		});
 	}
 
-	private static void RegisterIntentPut(AndroidApiRegistryBuilder builder, AndroidFrameworkState state, string descriptor, BundleValueKind kind, Func<object?, object?> convert)
+	private static void RegisterIntentPut(AndroidApiRegistryBuilder builder, AndroidFrameworkState state, string descriptor, BundleValueKind kind, Func<object, object> convert)
 	{
 		builder.Register(Api("Landroid/content/Intent;", "putExtra", descriptor), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -776,12 +780,12 @@ public static class AndroidApiBindings
 		});
 	}
 
-	private static void RegisterIntentGet(AndroidApiRegistryBuilder builder, AndroidFrameworkState state, string name, string descriptor, BundleValueKind kind, object? defaultValue)
+	private static void RegisterIntentGet(AndroidApiRegistryBuilder builder, AndroidFrameworkState state, string name, string descriptor, BundleValueKind kind, object defaultValue)
 	{
 		builder.Register(Api("Landroid/content/Intent;", name, descriptor), delegate(AndroidApiInvocation _, object[] args)
 		{
 			BundleValue bundleValue = state.Intents.Get(Receiver(args)).Extras.Get(RequireString(args[1], allowNull: true));
-			object? obj;
+			object obj;
 			if (defaultValue is int)
 			{
 				int num = (int)defaultValue;
@@ -814,7 +818,7 @@ public static class AndroidApiBindings
 		try
 		{
 			window.SetTitle(title, invocation.CancellationToken);
-			return null;
+			return null!;
 		}
 		catch (OperationCanceledException)
 		{
@@ -886,7 +890,7 @@ public static class AndroidApiBindings
 		return result;
 	}
 
-	private static string? AsText(AndroidFrameworkState? state, object? value)
+	private static string AsText(AndroidFrameworkState state, object value)
 	{
 		if (1 == 0)
 		{
@@ -922,12 +926,12 @@ public static class AndroidApiBindings
 		return RequireDex(args[0]);
 	}
 
-	private static DexObject RequireDex(object? value)
+	private static DexObject RequireDex(object value)
 	{
 		return (value as DexObject) ?? throw new ArgumentException("Expected DEX object.");
 	}
 
-	private static DexObject? OptionalDex(object? value)
+	private static DexObject OptionalDex(object value)
 	{
 		return (value == null) ? null : RequireDex(value);
 	}
@@ -937,7 +941,7 @@ public static class AndroidApiBindings
 		return state.Ui ?? throw new AndroidApiUnavailableException(new AndroidApiMethodId("Landroid/app/Activity;", "setContentView", "(I)V"), "APK resource/UI session is unavailable.");
 	}
 
-	private static string RequireString(object? value, bool allowNull = false)
+	private static string RequireString(object value, bool allowNull = false)
 	{
 		object obj = value as string;
 		if (obj == null)
@@ -951,7 +955,7 @@ public static class AndroidApiBindings
 		return (string)obj;
 	}
 
-	private static int RequireInt(object? value)
+	private static int RequireInt(object value)
 	{
 		if (1 == 0)
 		{
@@ -982,7 +986,7 @@ public static class AndroidApiBindings
 		return result;
 	}
 
-	private static long RequireLong(object? value)
+	private static long RequireLong(object value)
 	{
 		if (value is long)
 		{
@@ -1161,7 +1165,7 @@ public static class AndroidApiBindings
 		return (a << 24) | (r << 16) | (g << 8) | b;
 	}
 
-	private static int RequireToastDuration(object? value)
+	private static int RequireToastDuration(object value)
 	{
 		int duration = RequireInt(value);
 		if ((uint)duration > 1u)

@@ -25,7 +25,7 @@ internal static class JavaUtilConcurrentAtomicBindings
         // interpreter's if-eq/if-ne compare reference values, not value equality.
         builder.Register(Api("Ljava/util/concurrent/atomic/AtomicReference;", "<init>", "()V"), (_, args) => { state.AtomicReferences.Add(Receiver(args), new AtomicReferencePeer()); return null!; });
         builder.Register(Api("Ljava/util/concurrent/atomic/AtomicReference;", "<init>", "(Ljava/lang/Object;)V"), (_, args) => { state.AtomicReferences.Add(Receiver(args), new AtomicReferencePeer { Value = args[1] }); return null!; });
-        builder.Register(Api("Ljava/util/concurrent/atomic/AtomicReference;", "get", "()Ljava/lang/Object;"), (_, args) => state.AtomicReferences.Get(Receiver(args)).Value);
+        builder.Register(Api("Ljava/util/concurrent/atomic/AtomicReference;", "get", "()Ljava/lang/Object;"), (_, args) => state.AtomicReferences.Get(Receiver(args)).Value!);
         builder.Register(Api("Ljava/util/concurrent/atomic/AtomicReference;", "set", "(Ljava/lang/Object;)V"), (_, args) => { state.AtomicReferences.Get(Receiver(args)).Value = args[1]; return null!; });
         builder.Register(Api("Ljava/util/concurrent/atomic/AtomicReference;", "compareAndSet", "(Ljava/lang/Object;Ljava/lang/Object;)Z"), (_, args) =>
         {

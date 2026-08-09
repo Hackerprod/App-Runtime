@@ -6,3 +6,4 @@ artifacts/
 .tmp/
 .atl/
 .claude/
+TestResults/

@@ -459,10 +459,11 @@ internal sealed class ThreadPeer
     internal string? Name { get; set; }
     internal Thread? ClrThread { get; set; }
     internal DexObject? Runnable { get; set; }
+    internal Exception? TerminalException { get; set; }
     internal ManualResetEventSlim Completion { get; } = new(false);
     internal ManualResetEventSlim InterruptSignal { get; } = new(false);
-    private volatile int _interrupted;
-    internal bool Interrupted { get => _interrupted != 0; set => Volatile.Write(ref _interrupted, value ? 1 : 0); }
+    private int _interrupted;
+    internal bool Interrupted { get => Volatile.Read(ref _interrupted) != 0; set => Volatile.Write(ref _interrupted, value ? 1 : 0); }
     internal void Interrupt()
     {
         Interlocked.Exchange(ref _interrupted, 1);

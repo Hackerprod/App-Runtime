@@ -46,7 +46,7 @@ namespace AndroidRuntime.Core.Dex
             AndroidApiRegistry api,
             long maxStepsPerInvocation = DefaultMaxStepsPerInvocation,
             AndroidApiSessionContext apiSession = null,
-            AndroidGil? gil = null)
+            AndroidGil gil = null)
         {
             _dexSet = dexSet ?? throw new ArgumentNullException(nameof(dexSet));
             _primaryDex = dexSet.Primary;
@@ -273,7 +273,7 @@ namespace AndroidRuntime.Core.Dex
         /// override, falling back to the bound Thread.run()V (which dispatches the
         /// Runnable or no-ops), matching how invoke-virtual resolves elsewhere.
         /// </summary>
-        public void RunGuestThreadBody(DexObject receiver, DexObject? runnable)
+        public void RunGuestThreadBody(DexObject receiver, DexObject runnable)
         {
             if (runnable is not null)
             {
@@ -298,7 +298,7 @@ namespace AndroidRuntime.Core.Dex
                     Execute(method, PrependReceiver(receiver, Array.Empty<object>()));
                     return;
                 }
-                DexClass? cls = _dexSet.FindClass(current);
+                DexClass cls = _dexSet.FindClass(current);
                 if (cls is null || string.IsNullOrEmpty(cls.SuperclassDescriptor)) break;
                 current = cls.SuperclassDescriptor;
             }
@@ -1353,7 +1353,7 @@ namespace AndroidRuntime.Core.Dex
         /// </summary>
         private void EnsureClassInitialized(string classDescriptor)
         {
-            DexClass? cls = _dexSet.FindClass(classDescriptor);
+            DexClass cls = _dexSet.FindClass(classDescriptor);
             if (cls is null) return;
             if (_classInitState.TryGetValue(classDescriptor, out int state) && state != ClassInitNotStarted)
             {
@@ -1383,7 +1383,7 @@ namespace AndroidRuntime.Core.Dex
             _classInitOwner[classDescriptor] = Environment.CurrentManagedThreadId;
             try
             {
-                DexEncodedMethod? clinit = _dexSet.FindMethodExact(classDescriptor, "<clinit>", "()V");
+                DexEncodedMethod clinit = _dexSet.FindMethodExact(classDescriptor, "<clinit>", "()V");
                 if (clinit is not null)
                     Execute(clinit, Array.Empty<object>());
             }
