@@ -92,6 +92,7 @@ public static class AndroidApiBindings
 		RegisterIntents(builder, state);
 		RegisterToasts(builder, state);
 		JavaUtilConcurrentAtomicBindings.Register(builder, state);
+		JavaUtilMapBindings.Register(builder, state);
 		RegisterWeakHashMaps(builder, state);
 		RegisterHashMaps(builder, state);
 		RegisterArrayLists(builder, state);
