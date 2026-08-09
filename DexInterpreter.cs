@@ -98,6 +98,45 @@ namespace AndroidRuntime.Core.Dex
         /// arrays, and primitives (no resolvable superclass here).</summary>
         internal string SuperclassDescriptorOf(string descriptor) => SuperclassOf(descriptor);
 
+        /// <summary>Whether a guest class with this descriptor is defined in the
+        /// loaded dex set (exposed for Class.forName — framework types are NOT
+        /// resolvable by name, no reverse index exists).</summary>
+        internal bool HasGuestClass(string descriptor) => _dexSet.FindClass(descriptor) is not null;
+
+        /// <summary>Runs the guest class's &lt;clinit&gt; if not already done (exposed
+        /// for Class.forName, which triggers initialization as a documented side
+        /// effect; framework descriptors no-op).</summary>
+        internal void EnsureGuestClassInitialized(string descriptor) => EnsureClassInitialized(descriptor);
+
+        /// <summary>
+        /// The declared methods of a guest class (DirectMethods + VirtualMethods),
+        /// EXCLUDING &lt;init&gt; and &lt;clinit&gt; — real Class.getDeclaredMethods()
+        /// contract (constructors are a separate reflection surface and the static
+        /// initializer is not a Java method). Framework/non-DexClass types have no
+        /// guest method model -> empty.
+        /// </summary>
+        internal IReadOnlyList<DexEncodedMethod> DeclaredMethodsOf(string descriptor)
+        {
+            DexClass cls = _dexSet.FindClass(descriptor);
+            if (cls is null) return Array.Empty<DexEncodedMethod>();
+            var result = new List<DexEncodedMethod>();
+            foreach (DexEncodedMethod method in cls.AllMethods())
+            {
+                if (method.Method.Name is not ("<init>" or "<clinit>"))
+                    result.Add(method);
+            }
+            return result;
+        }
+
+        /// <summary>The DIRECTLY declared interfaces of a guest class (DexClass's
+        /// own interface list — real getInterfaces() is direct, not transitive);
+        /// empty for framework types without a guest class model.</summary>
+        internal IReadOnlyList<string> DeclaredInterfacesOf(string descriptor)
+        {
+            DexClass cls = _dexSet.FindClass(descriptor);
+            return cls?.Interfaces ?? (IReadOnlyList<string>)Array.Empty<string>();
+        }
+
         /// <summary>
         /// Every initialized static field value that is a reference to the given
         /// enum class — the constants a guest &lt;clinit&gt; stored via sput-object.

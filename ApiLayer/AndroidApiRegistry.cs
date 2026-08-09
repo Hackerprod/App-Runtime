@@ -381,7 +381,7 @@ public sealed class AndroidApiRegistry
         // misreport a genuine static call as a shape mismatch instead of the honest
         // unimplemented boundary.
         if (api.ClassDescriptor == "Ljava/lang/Class;" && api.MethodName == "forName") return true;
-        if (api.ClassDescriptor is "Landroid/app/Activity;" or "Landroid/content/Context;" or "Landroid/os/BaseBundle;" or "Landroid/os/Bundle;" or "Landroid/content/Intent;" or "Landroid/widget/Toast;" or "Ljava/lang/String;" or "Ljava/lang/StringBuilder;" or "Ljava/lang/CharSequence;" or "Ljava/util/concurrent/TimeUnit;" or "Ljava/util/concurrent/ThreadPoolExecutor;" or "Ljava/util/concurrent/ExecutorService;" or "Ljava/util/concurrent/Executor;" or "Ljava/util/concurrent/FutureTask;" or "Ljava/util/concurrent/Future;" or "Ljava/util/concurrent/ThreadFactory;" or "Landroid/os/Handler;" or "Landroid/os/Looper;" or "Ljava/lang/Class;" or "Ljava/lang/Enum;") return false;
+        if (api.ClassDescriptor is "Landroid/app/Activity;" or "Landroid/content/Context;" or "Landroid/os/BaseBundle;" or "Landroid/os/Bundle;" or "Landroid/content/Intent;" or "Landroid/widget/Toast;" or "Ljava/lang/String;" or "Ljava/lang/StringBuilder;" or "Ljava/lang/CharSequence;" or "Ljava/util/concurrent/TimeUnit;" or "Ljava/util/concurrent/ThreadPoolExecutor;" or "Ljava/util/concurrent/ExecutorService;" or "Ljava/util/concurrent/Executor;" or "Ljava/util/concurrent/FutureTask;" or "Ljava/util/concurrent/Future;" or "Ljava/util/concurrent/ThreadFactory;" or "Landroid/os/Handler;" or "Landroid/os/Looper;" or "Ljava/lang/Class;" or "Ljava/lang/Enum;" or "Ljava/lang/reflect/Method;") return false;
         return null;
     }
 

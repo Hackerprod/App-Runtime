@@ -80,8 +80,7 @@ internal static class JavaLangBindings
         });
     }
 
-    private static void RegisterClass(AndroidApiRegistryBuilder builder, AndroidFrameworkState state)
-    {
+    private static void RegisterClass(AndroidApiRegistryBuilder builder, AndroidFrameworkState state)    {
         // Real java.lang.Class contract for the commonly-used surface. Class
         // objects are canonical singletons per descriptor (AndroidFrameworkState
         // cache), so equals/hashCode are identity and come free.
@@ -126,6 +125,41 @@ internal static class JavaLangBindings
             string represented = state.ClassPeerOf(Receiver(args)).RepresentedDescriptor;
             string? packageName = PackageNameOf(represented);
             return packageName is null ? null! : state.EnsurePackageObject(packageName);
+        });
+        // Class.forName: real dynamic lookup by dotted binary name across the LOADED
+        // guest classes. Found -> triggers <clinit> (real documented side effect)
+        // and returns the canonical Class object; not found (including framework
+        // types, which have no reverse name index in this runtime) -> checked
+        // ClassNotFoundException.
+        builder.Register(Api("Ljava/lang/Class;", "forName", "(Ljava/lang/String;)Ljava/lang/Class;"), (_, args) => ForName(state, RequireString(args[0]), initialize: true));
+        builder.Register(Api("Ljava/lang/Class;", "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;"), (_, args) => ForName(state, RequireString(args[0]), RequireInt(args[1]) != 0));
+        // Bounded reflection for the androidx.lifecycle legacy observer scan (see
+        // README boundary #43): declared methods as Method[] (fresh Method objects
+        // — real Java does not guarantee Method reference identity across calls),
+        // declared interfaces as canonical Class[].
+        builder.Register(Api("Ljava/lang/Class;", "getDeclaredMethods", "()[Ljava/lang/reflect/Method;"), (_, args) =>
+        {
+            string represented = state.ClassPeerOf(Receiver(args)).RepresentedDescriptor;
+            var interpreter = state.Interpreter ?? throw new InvalidOperationException("getDeclaredMethods requires an attached interpreter.");
+            var methods = interpreter.DeclaredMethodsOf(represented);
+            var array = new DexArray("[Ljava/lang/reflect/Method;", methods.Count);
+            for (int index = 0; index < methods.Count; index++)
+            {
+                var methodObject = new DexObject("Ljava/lang/reflect/Method;");
+                state.Methods.Add(methodObject, new MethodPeer(represented, methods[index].Method.Name, methods[index].Method.Proto.Descriptor()));
+                array.Set(index, methodObject);
+            }
+            return array;
+        });
+        builder.Register(Api("Ljava/lang/Class;", "getInterfaces", "()[Ljava/lang/Class;"), (_, args) =>
+        {
+            string represented = state.ClassPeerOf(Receiver(args)).RepresentedDescriptor;
+            var interpreter = state.Interpreter ?? throw new InvalidOperationException("getInterfaces requires an attached interpreter.");
+            var interfaces = interpreter.DeclaredInterfacesOf(represented);
+            var array = new DexArray("[Ljava/lang/Class;", interfaces.Count);
+            for (int index = 0; index < interfaces.Count; index++)
+                array.Set(index, state.EnsureClassObject(interfaces[index]));
+            return array;
         });
         builder.Register(Api("Ljava/lang/Class;", "equals", "(Ljava/lang/Object;)Z"), (_, args) => ReferenceEquals(Receiver(args), args[1]) ? 1 : 0);
         builder.Register(Api("Ljava/lang/Class;", "hashCode", "()I"), (_, args) => Receiver(args).GetHashCode());
@@ -212,6 +246,52 @@ internal static class JavaLangBindings
         int lastDot = binary.LastIndexOf('.');
         if (lastDot <= 0) return null; // default package or a bare name
         return binary[..lastDot];
+    }
+
+    /// <summary>Class.forName core: dotted binary name -> internal descriptor,
+    /// lookup across loaded guest classes, initialization side effect, canonical
+    /// Class object.</summary>
+    private static object ForName(AndroidFrameworkState state, string className, bool initialize)
+    {
+        var interpreter = state.Interpreter ?? throw new InvalidOperationException("Class.forName requires an attached interpreter.");
+        string descriptor = DescriptorFromBinaryName(className);
+        // Only guest-defined classes are resolvable by name in this runtime:
+        // framework/API-bound types have no reverse name index (honest, correctly
+        // scoped limitation — they also throw ClassNotFoundException, real
+        // semantics for anything that cannot be loaded).
+        if (!interpreter.HasGuestClass(descriptor))
+            throw new GuestExceptionCarrier(GuestThrowableMetadata.Create("Ljava/lang/ClassNotFoundException;", className));
+        if (initialize)
+            interpreter.EnsureGuestClassInitialized(descriptor);
+        return state.EnsureClassObject(descriptor);
+    }
+
+    /// <summary>Reverse of Class.getName(): dotted binary name back to the
+    /// internal descriptor. Handles normal classes and (bounded) array names
+    /// whose class components are dotted ("[Ljava.lang.String;" -> "[Ljava/lang/String;").</summary>
+    private static string DescriptorFromBinaryName(string name)
+    {
+        if (name.StartsWith("[", StringComparison.Ordinal))
+        {
+            var builder = new System.Text.StringBuilder();
+            int index = 0;
+            while (index < name.Length && name[index] == '[')
+            {
+                builder.Append('[');
+                index++;
+            }
+            string component = name[index..];
+            if (component.StartsWith("L", StringComparison.Ordinal) && component.EndsWith(";", StringComparison.Ordinal))
+            {
+                builder.Append('L').Append(component.Substring(1, component.Length - 2).Replace('.', '/')).Append(';');
+            }
+            else
+            {
+                builder.Append(component);
+            }
+            return builder.ToString();
+        }
+        return "L" + name.Replace('.', '/') + ";";
     }
 
     private static void RegisterVoid(AndroidApiRegistryBuilder builder, string owner, string name, string descriptor) =>

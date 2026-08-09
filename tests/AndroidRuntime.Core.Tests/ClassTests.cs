@@ -18,6 +18,7 @@ public sealed class ClassTests
     private const string ObjectClass = "Ljava/lang/Object;";
     private const string EnumClass = "Ljava/lang/Enum;";
     private const string PackageClass = "Ljava/lang/Package;";
+    private const string MethodClass = "Ljava/lang/reflect/Method;";
 
     [Fact]
     public void Const_class_and_get_class_return_the_same_canonical_object()
@@ -107,8 +108,51 @@ public sealed class ClassTests
     }
 
     [Fact]
-    public void Enum_get_declaring_class_and_value_of_close_the_deferred_call_sites()
+    public void Class_for_name_finds_guest_classes_returns_canonical_and_initializes()
     {
+        var (state, registry, interpreter) = Session();
+        // Dotted binary name -> the SAME canonical object const-class/getClass yield.
+        var viaForName = Invoke(registry, state, ClassClass, "forName", "(Ljava/lang/String;)Ljava/lang/Class;", AndroidInvokeKind.Static, "c.Foo");
+        Assert.Same(interpreter.InvokeStaticExact(Probe, "classOfFoo", "()Ljava/lang/Class;"), viaForName);
+        Assert.Same(viaForName, Invoke(registry, state, ObjectClass, "getClass", "()Ljava/lang/Class;", AndroidInvokeKind.Virtual, new DexObject("Lc/Foo;")));
+
+        // Real side effect: forName triggers <clinit>. Color's constants are not
+        // populated until then, so valueOf only works AFTER forName.
+        Assert.Same(interpreter.InvokeStaticExact(Probe, "classOfColor", "()Ljava/lang/Class;"), Invoke(registry, state, ClassClass, "forName", "(Ljava/lang/String;)Ljava/lang/Class;", AndroidInvokeKind.Static, "c.Color"));
+        var red = Invoke(registry, state, EnumClass, "valueOf", "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;", AndroidInvokeKind.Static, interpreter.InvokeStaticExact(Probe, "classOfColor", "()Ljava/lang/Class;"), "RED");
+        Assert.NotNull(red);
+    }
+
+    [Fact]
+    public void Class_for_name_three_arg_overload_honors_the_initialize_flag()
+    {
+        var (state, registry, interpreter) = Session();
+        // initialize=false must NOT run <clinit>: Color's constants stay empty, so
+        // valueOf cannot find RED.
+        Invoke(registry, state, ClassClass, "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", AndroidInvokeKind.Static, "c.Color", 0, null!);
+        var notInitialized = Assert.Throws<GuestExceptionCarrier>(() => Invoke(registry, state, EnumClass, "valueOf", "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;", AndroidInvokeKind.Static, interpreter.InvokeStaticExact(Probe, "classOfColor", "()Ljava/lang/Class;"), "RED"));
+        Assert.Equal("Ljava/lang/IllegalArgumentException;", notInitialized.Throwable.TypeDescriptor);
+
+        // initialize=true runs it.
+        Invoke(registry, state, ClassClass, "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", AndroidInvokeKind.Static, "c.Color", 1, null!);
+        Assert.NotNull(Invoke(registry, state, EnumClass, "valueOf", "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;", AndroidInvokeKind.Static, interpreter.InvokeStaticExact(Probe, "classOfColor", "()Ljava/lang/Class;"), "RED"));
+    }
+
+    [Fact]
+    public void Class_for_name_unknown_and_framework_names_throw_class_not_found()
+    {
+        var (state, registry, _) = Session();
+        var unknown = Assert.Throws<GuestExceptionCarrier>(() => Invoke(registry, state, ClassClass, "forName", "(Ljava/lang/String;)Ljava/lang/Class;", AndroidInvokeKind.Static, "c.DoesNotExist"));
+        Assert.Equal("Ljava/lang/ClassNotFoundException;", unknown.Throwable.TypeDescriptor);
+
+        // Framework/API-bound types have no reverse name index in this runtime —
+        // an honest, correctly-scoped limitation: also ClassNotFoundException.
+        var framework = Assert.Throws<GuestExceptionCarrier>(() => Invoke(registry, state, ClassClass, "forName", "(Ljava/lang/String;)Ljava/lang/Class;", AndroidInvokeKind.Static, "java.lang.String"));
+        Assert.Equal("Ljava/lang/ClassNotFoundException;", framework.Throwable.TypeDescriptor);
+    }
+
+    [Fact]
+    public void Enum_get_declaring_class_and_value_of_close_the_deferred_call_sites()    {
         var (state, registry, interpreter) = Session();
         // Static access within bytecode runs Color.<clinit>, populating RED/BLUE.
         interpreter.InvokeStaticExact(Probe, "touchColor", "()V");
@@ -126,6 +170,80 @@ public sealed class ClassTests
         Assert.Equal("Ljava/lang/IllegalArgumentException;", error.Throwable.TypeDescriptor);
     }
 
+    [Fact]
+    public void Get_declared_methods_excludes_init_and_clinit_and_is_empty_for_framework()
+    {
+        var (state, registry, _) = Session();
+        // Color has <clinit> + trigger(): only trigger is a declared method.
+        var colorMethods = (DexArray)Invoke(registry, state, ClassClass, "getDeclaredMethods", "()[Ljava/lang/reflect/Method;", AndroidInvokeKind.Virtual, state.EnsureClassObject("Lc/Color;"));
+        Assert.Single(ToList(colorMethods));
+        Assert.Equal("trigger", Invoke(registry, state, MethodClass, "getName", "()Ljava/lang/String;", AndroidInvokeKind.Virtual, colorMethods.Get(0)!));
+
+        // Ctor has <init> + run(): only run is a declared method (real JDK contract
+        // excludes constructors).
+        var ctorMethods = (DexArray)Invoke(registry, state, ClassClass, "getDeclaredMethods", "()[Ljava/lang/reflect/Method;", AndroidInvokeKind.Virtual, state.EnsureClassObject("Lc/Ctor;"));
+        Assert.Single(ToList(ctorMethods));
+        Assert.Equal("run", Invoke(registry, state, MethodClass, "getName", "()Ljava/lang/String;", AndroidInvokeKind.Virtual, ctorMethods.Get(0)!));
+
+        // Probe has 5 declared methods, all returned.
+        var probeMethods = (DexArray)Invoke(registry, state, ClassClass, "getDeclaredMethods", "()[Ljava/lang/reflect/Method;", AndroidInvokeKind.Virtual, state.EnsureClassObject(Probe));
+        Assert.Equal(5, probeMethods.Length);
+
+        // Framework type (no guest method model): empty array, honest for the
+        // lifecycle scan path.
+        var frameworkMethods = (DexArray)Invoke(registry, state, ClassClass, "getDeclaredMethods", "()[Ljava/lang/reflect/Method;", AndroidInvokeKind.Virtual, state.EnsureClassObject("Ljava/lang/Object;"));
+        Assert.Empty(ToList(frameworkMethods));
+    }
+
+    [Fact]
+    public void Method_get_annotation_always_returns_null()
+    {
+        var (state, registry, _) = Session();
+        var colorMethods = (DexArray)Invoke(registry, state, ClassClass, "getDeclaredMethods", "()[Ljava/lang/reflect/Method;", AndroidInvokeKind.Virtual, state.EnsureClassObject("Lc/Color;"));
+        // Any annotation-typed Class argument; the runtime has no annotation model.
+        Assert.Null(Invoke(registry, state, MethodClass, "getAnnotation", "(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;", AndroidInvokeKind.Virtual, colorMethods.Get(0)!, state.EnsureClassObject("Ljava/lang/Deprecated;")));
+    }
+
+    [Fact]
+    public void Get_interfaces_returns_canonical_class_objects()
+    {
+        var (state, registry, _) = Session();
+        var interfaces = (DexArray)Invoke(registry, state, ClassClass, "getInterfaces", "()[Ljava/lang/Class;", AndroidInvokeKind.Virtual, state.EnsureClassObject("Lc/HasInterface;"));
+        Assert.Single(ToList(interfaces));
+        // Canonical identity: same object as EnsureClassObject for the interface.
+        Assert.Same(state.EnsureClassObject("Lc/SomeIface;"), interfaces.Get(0));
+
+        // A class without interfaces -> empty; a framework type -> empty.
+        Assert.Empty(ToList((DexArray)Invoke(registry, state, ClassClass, "getInterfaces", "()[Ljava/lang/Class;", AndroidInvokeKind.Virtual, state.EnsureClassObject("Lc/Foo;"))));
+        Assert.Empty(ToList((DexArray)Invoke(registry, state, ClassClass, "getInterfaces", "()[Ljava/lang/Class;", AndroidInvokeKind.Virtual, state.EnsureClassObject("Ljava/lang/Object;"))));
+    }
+
+    [Fact]
+    public void Lifecycle_observer_scan_pattern_completes_without_reaching_invoke()
+    {
+        // Faithful reproduction of ClassesInfoCache's scan: getDeclaredMethods over
+        // a class, iterate, getAnnotation on every method, expect all null — the
+        // exact shape that proves Method.invoke is unreachable on this path.
+        var (state, registry, _) = Session();
+        var methods = (DexArray)Invoke(registry, state, ClassClass, "getDeclaredMethods", "()[Ljava/lang/reflect/Method;", AndroidInvokeKind.Virtual, state.EnsureClassObject("Lc/Ctor;"));
+        int annotated = 0;
+        for (int index = 0; index < methods.Length; index++)
+        {
+            var annotation = Invoke(registry, state, MethodClass, "getAnnotation", "(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;", AndroidInvokeKind.Virtual, methods.Get(index)!, state.EnsureClassObject("Landroidx/lifecycle/OnLifecycleEvent;"));
+            if (annotation is not null) annotated++;
+        }
+        Assert.Equal(0, annotated);
+        // No Method.invoke binding exists (provably unreachable on this path).
+        Assert.False(registry.Contains(new AndroidApiMethodId("Ljava/lang/reflect/Method;", "invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;")));
+    }
+
+    private static List<object?> ToList(DexArray array)
+    {
+        var list = new List<object?>();
+        for (int index = 0; index < array.Length; index++) list.Add(array.Get(index));
+        return list;
+    }
+
     private static (AndroidFrameworkState State, AndroidApiRegistry Registry, DexInterpreter Interpreter) Session()
     {
         var state = new AndroidFrameworkState("s", "p", "La;", new ActivityWindowPeers());
@@ -140,11 +258,14 @@ public sealed class ClassTests
     private static DexFile BuildDex()
     {
         var dex = new DexFile();
-        // Types: 0 Lc/Color;, 1 Lc/Foo;, 2 I, 3 [Lc/Foo;
+        // Types: 0 Lc/Color;, 1 Lc/Foo;, 2 I, 3 [Lc/Foo;, 4 Lc/Ctor;, 5 Lc/HasInterface;, 6 Lc/SomeIface;
         dex.TypeDescriptors.Add("Lc/Color;");
         dex.TypeDescriptors.Add("Lc/Foo;");
         dex.TypeDescriptors.Add("I");
         dex.TypeDescriptors.Add("[Lc/Foo;");
+        dex.TypeDescriptors.Add("Lc/Ctor;");
+        dex.TypeDescriptors.Add("Lc/HasInterface;");
+        dex.TypeDescriptors.Add("Lc/SomeIface;");
         // Strings: 0 RED, 1 BLUE
         dex.Strings.Add("RED");
         dex.Strings.Add("BLUE");
@@ -163,6 +284,17 @@ public sealed class ClassTests
         probe.DirectMethods.Add(Method(Probe, "touchColor", "()V", 1, 0, [0x0062, 0x0000, 0x000e]));
 
         var foo = new DexClass { Descriptor = "Lc/Foo;", SuperclassDescriptor = "Ljava/lang/Object;" };
+
+        // Lc/Ctor; has a real <init> and one method — getDeclaredMethods must
+        // exclude the constructor (real JDK contract) and keep run().
+        var ctor = new DexClass { Descriptor = "Lc/Ctor;", SuperclassDescriptor = "Ljava/lang/Object;" };
+        ctor.DirectMethods.Add(Method("Lc/Ctor;", "<init>", "()V", 1, 1, [0x000e], isStatic: false));
+        ctor.DirectMethods.Add(Method("Lc/Ctor;", "run", "()V", 1, 1, [0x000e], isStatic: false));
+
+        // Lc/HasInterface; declares one interface; Lc/SomeIface; is that interface.
+        var hasInterface = new DexClass { Descriptor = "Lc/HasInterface;", SuperclassDescriptor = "Ljava/lang/Object;" };
+        hasInterface.Interfaces.Add("Lc/SomeIface;");
+        var someInterface = new DexClass { Descriptor = "Lc/SomeIface;", SuperclassDescriptor = "Ljava/lang/Object;" };
 
         // Lc/Color; <clinit> populates RED/BLUE as static fields (the real enum
         // shape: new-instance + Enum.<init>(String,I) + sput-object).
@@ -186,6 +318,9 @@ public sealed class ClassTests
         dex.Classes.Add(probe);
         dex.Classes.Add(foo);
         dex.Classes.Add(color);
+        dex.Classes.Add(ctor);
+        dex.Classes.Add(hasInterface);
+        dex.Classes.Add(someInterface);
 
         // Shared method reference pool.
         dex.Methods.Add(Ref(Probe, "classOfFoo", "()Ljava/lang/Class;"));       // 0
@@ -218,7 +353,7 @@ public sealed class ClassTests
         Code = new DexCodeItem { RegistersSize = registers, InsSize = ins, OutsSize = 0, Instructions = instructions }
     };
 
-    private static object? Invoke(AndroidApiRegistry registry, AndroidFrameworkState state, string owner, string name, string descriptor, AndroidInvokeKind kind, params object[] args)
+    private static object Invoke(AndroidApiRegistry registry, AndroidFrameworkState state, string owner, string name, string descriptor, AndroidInvokeKind kind, params object[] args)
     {
         var api = new AndroidApiMethodId(owner, name, descriptor);
         var context = new AndroidApiSessionContext(state.SessionId, state.PackageName, state.ActivityDescriptor, default, () => true);

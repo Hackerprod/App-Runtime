@@ -33,6 +33,7 @@ public static class AndroidApiBindings
 		JavaLangBindings.Register(builder, state);
 		JavaLangThreadBindings.Register(builder, state);
 		JavaLangStringBindings.Register(builder, state);
+		JavaLangReflectBindings.Register(builder, state);
 		KotlinTextStringsKtBindings.Register(builder, state);
 		JavaUtilConcurrentExecutorBindings.Register(builder, state);
 		AndroidOsHandlerBindings.Register(builder, state);

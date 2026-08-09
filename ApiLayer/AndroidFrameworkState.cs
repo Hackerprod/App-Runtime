@@ -11,7 +11,7 @@ namespace AndroidRuntime.Core.ApiLayer;
 
 public sealed record AndroidPeerLimits
 {
-    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256)
+    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024)
     {
         StringBuilders = maxStringBuilders;
         Bundles = maxBundles;
@@ -33,6 +33,7 @@ public sealed record AndroidPeerLimits
         Futures = maxFutures;
         Loopers = maxLoopers;
         Handlers = maxHandlers;
+        Methods = maxMethods;
         Validate();
     }
 
@@ -57,10 +58,11 @@ public sealed record AndroidPeerLimits
     public int Futures { get; }
     public int Loopers { get; }
     public int Handlers { get; }
+    public int Methods { get; }
 
     public void Validate()
     {
-        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0)
+        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0)
             throw new ArgumentOutOfRangeException(nameof(AndroidPeerLimits), "Peer limits must be positive.");
     }
 }
@@ -146,6 +148,7 @@ public sealed class AndroidFrameworkState : IDisposable
         Futures = new AndroidPeerStore<FuturePeer>("Future", PeerLimits.Futures);
         Loopers = new AndroidPeerStore<LooperPeer>("Looper", PeerLimits.Loopers, peer => peer.Quit());
         Handlers = new AndroidPeerStore<HandlerPeer>("Handler", PeerLimits.Handlers);
+        Methods = new AndroidPeerStore<MethodPeer>("Method", PeerLimits.Methods);
         ApplicationContext = new DexObject("Landroid/app/Application;");
         LauncherIntent = new DexObject("Landroid/content/Intent;");
         Intents.Add(LauncherIntent, new IntentPeer { Action = "android.intent.action.MAIN" });
@@ -196,6 +199,7 @@ public sealed class AndroidFrameworkState : IDisposable
     internal AndroidPeerStore<FuturePeer> Futures { get; }
     internal AndroidPeerStore<LooperPeer> Loopers { get; }
     internal AndroidPeerStore<HandlerPeer> Handlers { get; }
+    internal AndroidPeerStore<MethodPeer> Methods { get; }
     /// <summary>The session's GIL: shared by the interpreter and every binding that
     /// must release it around real blocking (sleep/join/monitor-enter/class-init
     /// wait). AndroidAppRuntime replaces this with the execution lane's GIL.</summary>
@@ -417,6 +421,7 @@ public sealed class AndroidFrameworkState : IDisposable
         Futures.Clear();
         Loopers.Clear();
         Handlers.Clear();
+        Methods.Clear();
         Activity = null;
         SystemServices?.Dispose();
     }
@@ -675,6 +680,14 @@ internal sealed record ClassPeer(string RepresentedDescriptor);
 internal sealed record PackagePeer(string Name);
 
 /// <summary>
+/// Identity state for a guest java.lang.reflect.Method object: the underlying
+/// method's declaring class, name, and descriptor. Real Java does NOT guarantee
+/// Method reference identity across separate reflective calls, so a fresh
+/// object per getDeclaredMethods() call is correct — no canonical cache needed.
+/// </summary>
+internal sealed record MethodPeer(string DeclaringClassDescriptor, string Name, string Descriptor);
+
+/// <summary>
 /// Completion/state for a guest java.util.concurrent.Future. State transitions:
 /// 0 pending, 1 running, 2 done, 3 cancelled. Completion is a ManualResetEvent so
 /// Future.get() genuinely blocks (releasing the GIL) like Thread.join does.
@@ -823,6 +836,7 @@ internal static class AndroidFrameworkHierarchy
         ["Ljava/lang/NegativeArraySizeException;"] = "Ljava/lang/RuntimeException;",
         ["Ljava/util/NoSuchElementException;"] = "Ljava/lang/RuntimeException;",
         ["Ljava/lang/InterruptedException;"] = "Ljava/lang/Exception;",
+        ["Ljava/lang/ClassNotFoundException;"] = "Ljava/lang/Exception;",
         ["Ljava/util/concurrent/RejectedExecutionException;"] = "Ljava/lang/RuntimeException;",
         ["Ljava/util/concurrent/CancellationException;"] = "Ljava/lang/IllegalStateException;",
         ["Ljava/util/concurrent/TimeoutException;"] = "Ljava/lang/Exception;",
