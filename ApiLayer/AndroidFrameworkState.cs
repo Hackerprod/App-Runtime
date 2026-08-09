@@ -117,6 +117,7 @@ public sealed class AndroidFrameworkState : IDisposable
         AndroidToastLimits? toastLimits = null,
         AndroidPeerLimits? peerLimits = null,
         IAndroidClock? clock = null,
+        IAndroidWallClock? wallClock = null,
         IReadOnlyCollection<string>? declaredPermissions = null,
         IAndroidCapabilityPolicy? capabilityPolicy = null,
         IAndroidClipboard? clipboard = null,
@@ -140,6 +141,7 @@ public sealed class AndroidFrameworkState : IDisposable
         PeerLimits = peerLimits ?? AndroidPeerLimits.Default;
         PeerLimits.Validate();
         Clock = clock ?? new StopwatchAndroidClock();
+        WallClock = wallClock ?? new UtcAndroidWallClock();
         DeclaredPermissions = Array.AsReadOnly((declaredPermissions ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal).ToArray());
         CapabilityPolicy = capabilityPolicy ?? AndroidCapabilityPolicy.DenyAll;
         Clipboard = clipboard ?? new UnavailableAndroidClipboard();
@@ -198,6 +200,7 @@ public sealed class AndroidFrameworkState : IDisposable
     public AndroidToastLimits ToastLimits { get; }
     public AndroidPeerLimits PeerLimits { get; }
     public IAndroidClock Clock { get; }
+    public IAndroidWallClock WallClock { get; }
     public IReadOnlyCollection<string> DeclaredPermissions { get; }
     internal IAndroidCapabilityPolicy CapabilityPolicy { get; }
     internal IAndroidClipboard Clipboard { get; }

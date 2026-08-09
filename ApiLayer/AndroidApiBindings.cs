@@ -175,6 +175,8 @@ public static class AndroidApiBindings
 		JavaUtilLinkedHashSetBindings.Register(builder, state);
 		JavaUtilLinkedHashMapBindings.Register(builder, state);
 		JavaUtilLocaleBindings.Register(builder, state);
+		JavaUtilDateBindings.Register(builder, state);
+		JavaTextDateFormatBindings.Register(builder, state);
 		AndroidContentSharedPreferencesBindings.Register(builder, state);
 		RegisterWeakHashMaps(builder, state);
 		RegisterHashMaps(builder, state);

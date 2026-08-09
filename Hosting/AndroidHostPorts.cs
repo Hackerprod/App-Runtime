@@ -80,6 +80,25 @@ public interface IAndroidClock
     long ElapsedRealtimeNanos();
 }
 
+/// <summary>Wall-clock port: "what time is it right now" as epoch milliseconds
+/// (UTC). Deliberately separate from <see cref="IAndroidClock"/>, which is
+/// monotonic/uptime-only and cannot answer current-time questions. Real Android
+/// answers this via System.currentTimeMillis()/new Date(); this port gives the
+/// host a testable seam (inject a fixed value in tests, never assert against
+/// real "now").</summary>
+public interface IAndroidWallClock
+{
+    long NowMillis();
+}
+
+/// <summary>Default wall-clock implementation: real UTC epoch milliseconds via
+/// the CLR clock. Honest default — wall time genuinely is "now"; the port
+/// exists for host/test injection, not to hide the real time.</summary>
+public sealed class UtcAndroidWallClock : IAndroidWallClock
+{
+    public long NowMillis() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+}
+
 public enum AndroidCapability { ClipboardRead, ClipboardWrite, NetworkState, PowerRead }
 public sealed record AndroidCapabilityRequest(string SessionId, string PackageName, AndroidCapability Capability, string Operation);
 public interface IAndroidCapabilityPolicy { bool IsAllowed(AndroidCapabilityRequest request); }
@@ -201,6 +220,7 @@ public sealed class AndroidRuntimeServices
         AndroidToastLimits? toastLimits = null,
         AndroidPeerLimits? peerLimits = null,
         IAndroidClock? clock = null,
+        IAndroidWallClock? wallClock = null,
         IAndroidCapabilityPolicy? capabilityPolicy = null,
         IAndroidClipboard? clipboard = null,
         IAndroidConnectivity? connectivity = null,
@@ -221,6 +241,7 @@ public sealed class AndroidRuntimeServices
         PeerLimits = peerLimits ?? AndroidPeerLimits.Default;
         PeerLimits.Validate();
         Clock = clock ?? new StopwatchAndroidClock();
+        WallClock = wallClock ?? new UtcAndroidWallClock();
         CapabilityPolicy = capabilityPolicy ?? AndroidCapabilityPolicy.DenyAll;
         Clipboard = clipboard ?? new UnavailableAndroidClipboard();
         Connectivity = connectivity ?? new UnavailableAndroidConnectivity();
@@ -237,6 +258,7 @@ public sealed class AndroidRuntimeServices
     public AndroidToastLimits ToastLimits { get; }
     public AndroidPeerLimits PeerLimits { get; }
     public IAndroidClock Clock { get; }
+    public IAndroidWallClock WallClock { get; }
     public IAndroidCapabilityPolicy CapabilityPolicy { get; }
     public IAndroidClipboard Clipboard { get; }
     public IAndroidConnectivity Connectivity { get; }
