@@ -58,6 +58,11 @@ struct android_view_s {
     color_rgba background_color{1.f, 1.f, 1.f, 1.f};
     bool has_background = false;
 
+    /* Style/theme: raw style id the view was inflated with (0 = none); the
+     * parent chain is walked through the resource bridge at resolution time,
+     * never cached here (the resolved state lives in the fields above). */
+    uint32_t style_id = 0;
+
     float padding_left_dp = 0.f, padding_top_dp = 0.f;
     float padding_right_dp = 0.f, padding_bottom_dp = 0.f;
     float min_width_dp = 0.f, min_height_dp = 0.f;
@@ -87,6 +92,14 @@ struct android_view_s {
     /* ImageView */
     std::string image_source;
     int32_t scale_type = ANDROID_SCALE_FIT_CENTER;
+    bool adjust_view_bounds = false;
+    float max_width_dp = 0.f;  /* 0 = unbounded (AOSP Integer.MAX_VALUE) */
+    float max_height_dp = 0.f;
+    /* Resolved draw geometry (AOSP configureBounds): the intrinsic image is
+     * mapped from image_src_rect into image_dst_rect, clipped to the view box. */
+    rectf image_src_rect{};
+    rectf image_dst_rect{};
+    bool image_has_geometry = false;
 
     /* CheckBox / RadioButton */
     bool checked = false;
@@ -132,6 +145,25 @@ struct android_ui_s {
     android_image_dimensions_fn image_dimensions = nullptr;
     void* image_dimensions_data = nullptr;
 
+    /* Phase 2 resource bridge (App Runtime as provider). */
+    android_resolve_resource_fn resolve_resource = nullptr;
+    android_resolve_style_fn resolve_style = nullptr;
+    android_fetch_file_fn fetch_file = nullptr;
+    void* bridge_data = nullptr;
+    /* Active theme's root style id (from the last inflate's root node). */
+    uint32_t theme_style_id = 0;
+
+    /* Render surface for decoded-image uploads (host registers it). */
+    void* surface = nullptr;
+
+    /* Decoded image cache: source key -> owned ARGB8888 pixels. */
+    struct DecodedImage {
+        int width = 0;
+        int height = 0;
+        std::vector<uint8_t> argb; /* straight ARGB8888, row-major */
+    };
+    std::unordered_map<std::string, DecodedImage> decoded_images;
+
     std::vector<android_view_s*> roots;
     std::vector<android_view_s*> all_views;
     std::unordered_map<int32_t, android_view_s*> id_index;
@@ -175,6 +207,17 @@ inline float padding_v(const android_view_s* v, const android_ui_s* ui) {
 
 inline bool gravity_has(int32_t gravity, int32_t flags) {
     return (gravity & flags) == flags;
+}
+
+/* LTR normalization: START resolves to LEFT and END to RIGHT, exactly like
+ * AOSP View.getLayoutDirection applied to gravity (RELATIVE_LAYOUT_DIRECTION
+ * bits are cleared after resolution). Non-relative bits pass through. Uses
+ * gravity_has so a plain LEFT (0x3) never matches END (0x00800005) through
+ * their shared low bit. */
+inline int32_t gravity_normalize_ltr(int32_t gravity) {
+    int32_t g = gravity & ~ANDROID_GRAVITY_RELATIVE_LAYOUT_DIRECTION;
+    if (gravity_has(gravity, ANDROID_GRAVITY_END)) g |= ANDROID_GRAVITY_RIGHT;
+    return g;
 }
 
 inline bool is_group(android_view_class_t cls) {
@@ -277,5 +320,13 @@ inline android_measured_size_t measure_child_with_margins(
  * deterministic monospace-ish approximation so the core never crashes. */
 android_text_metrics_t measure_text(
     const android_ui_s* ui, const char* text, float size_px, float max_width);
+
+/* Defined in android_image_decode.cpp (stb_image PNG/JPEG decode). */
+bool decode_and_cache_image(android_ui_s* ui, const std::string& source);
+bool image_dimensions_from_cache(const android_ui_s* ui,
+                                 const std::string& source,
+                                 float* out_w, float* out_h);
+const android_ui_s::DecodedImage* find_decoded_image(
+    const android_ui_s* ui, const std::string& source);
 
 } // namespace viewruntime::android

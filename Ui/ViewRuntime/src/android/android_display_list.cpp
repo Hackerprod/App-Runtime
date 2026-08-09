@@ -1,11 +1,13 @@
 #include "android_types.h"
 #include "../rendering/display_list_types.h"
+#include "../include/viewruntime/viewruntime_backend.h"
 
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <new>
+#include <vector>
 
 /* Display-list recorder: walks the measured/layout Android view tree and emits
  * the shared ViewRuntime paint-command model. Commands appended to the display
@@ -163,80 +165,20 @@ void paint_checkable(const android_view_s* view, display_list_s* list,
 void paint_image(const android_view_s* view, display_list_s* list,
                  const android_ui_s* ui) {
     paint_background(view, list);
-    if (view->image_source.empty() || !ui->image_dimensions) return;
-    sizef intrinsic{0.f, 0.f};
-    if (ui->image_dimensions(view->image_source.c_str(), &intrinsic, ui->image_dimensions_data) != TRUE) {
-        return;
-    }
-    if (intrinsic.width <= 0.f || intrinsic.height <= 0.f) return;
-    const float l = dp(ui, view->padding_left_dp), t = dp(ui, view->padding_top_dp);
-    const float r = dp(ui, view->padding_right_dp), b = dp(ui, view->padding_bottom_dp);
-    const rectf avail = {view->bounds.x + l, view->bounds.y + t,
-                                std::max(0.f, view->bounds.width - l - r),
-                                std::max(0.f, view->bounds.height - t - b)};
-    float dest_w = 0.f, dest_h = 0.f, dest_x = avail.x, dest_y = avail.y;
-    const float scale_x = avail.width / intrinsic.width;
-    const float scale_y = avail.height / intrinsic.height;
-    switch (view->scale_type) {
-        case ANDROID_SCALE_FIT_XY:
-            dest_w = avail.width; dest_h = avail.height; break;
-        case ANDROID_SCALE_CENTER:
-            dest_w = intrinsic.width; dest_h = intrinsic.height;
-            dest_x = avail.x + (avail.width - dest_w) * 0.5f;
-            dest_y = avail.y + (avail.height - dest_h) * 0.5f;
-            break;
-        case ANDROID_SCALE_CENTER_INSIDE: {
-            const float scale = scale_x < scale_y ? scale_x : scale_y;
-            const float s = scale < 1.f ? scale : 1.f;
-            dest_w = intrinsic.width * s; dest_h = intrinsic.height * s;
-            dest_x = avail.x + (avail.width - dest_w) * 0.5f;
-            dest_y = avail.y + (avail.height - dest_h) * 0.5f;
-            break;
-        }
-        case ANDROID_SCALE_CENTER_CROP: {
-            const float scale = scale_x > scale_y ? scale_x : scale_y;
-            dest_w = intrinsic.width * scale; dest_h = intrinsic.height * scale;
-            dest_x = avail.x + (avail.width - dest_w) * 0.5f;
-            dest_y = avail.y + (avail.height - dest_h) * 0.5f;
-            break;
-        }
-        case ANDROID_SCALE_FIT_START: {
-            const float scale = scale_x < scale_y ? scale_x : scale_y;
-            dest_w = intrinsic.width * scale; dest_h = intrinsic.height * scale;
-            break;
-        }
-        case ANDROID_SCALE_FIT_END: {
-            const float scale = scale_x < scale_y ? scale_x : scale_y;
-            dest_w = intrinsic.width * scale; dest_h = intrinsic.height * scale;
-            dest_x = avail.x + (avail.width - dest_w);
-            dest_y = avail.y + (avail.height - dest_h);
-            break;
-        }
-        default: { /* FIT_CENTER */
-            const float scale = scale_x < scale_y ? scale_x : scale_y;
-            dest_w = intrinsic.width * scale; dest_h = intrinsic.height * scale;
-            dest_x = avail.x + (avail.width - dest_w) * 0.5f;
-            dest_y = avail.y + (avail.height - dest_h) * 0.5f;
-            break;
-        }
-    }
+    if (view->image_source.empty() || !view->image_has_geometry) return;
+    /* The geometry (AOSP configureBounds) is content-relative; offset it into
+     * the view box (bounds + padding). */
+    const float ox = view->bounds.x + dp(ui, view->padding_left_dp);
+    const float oy = view->bounds.y + dp(ui, view->padding_top_dp);
     char* source = dup_string(view->image_source.c_str());
     if (!source) return;
     paint_command_t cmd{};
-    cmd.tag = PAINT_DRAW_BACKGROUND_IMAGE;
-    cmd.data.draw_background_image.source = source;
-    cmd.data.draw_background_image.paint_rect = {dest_x, dest_y, dest_w, dest_h};
-    cmd.data.draw_background_image.position_x = css_length_zero();
-    cmd.data.draw_background_image.position_y = css_length_zero();
-    cmd.data.draw_background_image.size_kind = BACKGROUND_SIZE_EXPLICIT;
-    cmd.data.draw_background_image.size_x = css_length_zero();
-    cmd.data.draw_background_image.size_y = css_length_zero();
-    cmd.data.draw_background_image.repeat_x = BACKGROUND_NO_REPEAT;
-    cmd.data.draw_background_image.repeat_y = BACKGROUND_NO_REPEAT;
-    cmd.data.draw_background_image.opacity = 1.f;
-    cmd.data.draw_background_image.source_rect = {0.f, 0.f, intrinsic.width, intrinsic.height};
-    cmd.data.draw_background_image.destination_rect = {dest_x, dest_y, dest_w, dest_h};
-    cmd.data.draw_background_image.has_resolved_geometry = TRUE;
+    cmd.tag = PAINT_DRAW_IMAGE;
+    cmd.data.draw_image.source = source;
+    cmd.data.draw_image.source_rect = view->image_src_rect;
+    cmd.data.draw_image.destination_rect = {
+        ox + view->image_dst_rect.x, oy + view->image_dst_rect.y,
+        view->image_dst_rect.width, view->image_dst_rect.height};
     list->commands.push_back(cmd);
 }
 
@@ -356,6 +298,88 @@ API status_t android_ui_record(
     if (!list) return ERROR_OUT_OF_MEMORY;
     viewruntime::android::record_view(root, list, ui);
     *out_list = list;
+    return OK;
+}
+
+/* Execute a recorded display list onto the session's registered render
+ * surface. This is the ONLY path that turns recorded commands into pixels —
+ * the host never interprets commands itself (Phase 2 ownership). Commands
+ * without a backend mapping are skipped, never approximated. */
+API status_t android_ui_render(
+    android_ui_t ui, display_list_t list) {
+    if (!ui || !list || !ui->surface) return ERROR_NULL_ARG;
+    viewruntime_frame_begin(ui->surface);
+    const int32_t count = display_list_get_count(list);
+    for (int32_t i = 0; i < count; ++i) {
+        paint_command_t cmd{};
+        if (display_list_get_command(list, i, &cmd) != OK) continue;
+        switch (cmd.tag) {
+            case PAINT_FILL_ROUNDED_RECT: {
+                const color_rgba& c = cmd.data.fill_rounded_rect.color;
+                const rectf& r = cmd.data.fill_rounded_rect.rect;
+                viewruntime_draw_fill_rect(ui->surface, r.x, r.y, r.width, r.height,
+                                           static_cast<uint8_t>(c.a * 255.f),
+                                           static_cast<uint8_t>(c.r * 255.f),
+                                           static_cast<uint8_t>(c.g * 255.f),
+                                           static_cast<uint8_t>(c.b * 255.f), 0);
+                break;
+            }
+            case PAINT_DRAW_TEXT: {
+                const auto& d = cmd.data.draw_text;
+                const rectf& r = d.rect;
+                /* UTF-16 width is bounded by the text byte length; the backend
+                 * needs a uint16 buffer, so convert the UTF-8 command text. */
+                const size_t len = std::strlen(d.text ? d.text : "");
+                std::vector<uint16_t> utf16(len + 1);
+                size_t n = 0;
+                const char* p = d.text;
+                while (p && *p) {
+                    unsigned int cp = 0;
+                    const unsigned char c0 = static_cast<unsigned char>(*p);
+                    if (c0 < 0x80) { cp = c0; ++p; }
+                    else if ((c0 & 0xE0) == 0xC0 && p[1]) {
+                        cp = ((c0 & 0x1F) << 6) | (p[1] & 0x3F); p += 2;
+                    } else if ((c0 & 0xF0) == 0xE0 && p[1] && p[2]) {
+                        cp = ((c0 & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F); p += 3;
+                    } else if ((c0 & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) {
+                        const uint32_t v = ((c0 & 0x07) << 18) | ((p[1] & 0x3F) << 12) |
+                                           ((p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+                        cp = v;
+                        if (cp >= 0x10000) {
+                            utf16[n++] = static_cast<uint16_t>(0xD800 + ((cp - 0x10000) >> 10));
+                            utf16[n++] = static_cast<uint16_t>(0xDC00 + ((cp - 0x10000) & 0x3FF));
+                            continue;
+                        }
+                        p += 4;
+                    } else { cp = 0xFFFD; ++p; }
+                    if (cp >= 0x10000) continue; /* handled above */
+                    utf16[n++] = static_cast<uint16_t>(cp);
+                }
+                viewruntime_draw_text(ui->surface, r.x, r.y, r.width, r.height,
+                                      utf16.data(), static_cast<int32_t>(n),
+                                      d.font_size,
+                                      static_cast<uint8_t>(d.color.a * 255.f),
+                                      static_cast<uint8_t>(d.color.r * 255.f),
+                                      static_cast<uint8_t>(d.color.g * 255.f),
+                                      static_cast<uint8_t>(d.color.b * 255.f), 0);
+                break;
+            }
+            case PAINT_DRAW_IMAGE: {
+                const auto& d = cmd.data.draw_image;
+                const rectf& sr = d.source_rect;
+                const rectf& dr = d.destination_rect;
+                viewruntime_draw_image(ui->surface, d.source ? d.source : "",
+                                       sr.x, sr.y, sr.width, sr.height,
+                                       dr.x, dr.y, dr.width, dr.height, 0);
+                break;
+            }
+            default:
+                /* Metadata / unbacked commands are skipped, never invented. */
+                break;
+        }
+        paint_command_free(&cmd);
+    }
+    viewruntime_frame_end(ui->surface);
     return OK;
 }
 

@@ -108,6 +108,10 @@ API status_t display_list_get_command(
             out_cmd->data.draw_background_image = src.data.draw_background_image;
             out_cmd->data.draw_background_image.source = viewruntime::strdup(src.data.draw_background_image.source);
             break;
+        case PAINT_DRAW_IMAGE:
+            out_cmd->data.draw_image = src.data.draw_image;
+            out_cmd->data.draw_image.source = viewruntime::strdup(src.data.draw_image.source);
+            break;
         case PAINT_APPLY_BACKDROP_FILTER:
             out_cmd->data.apply_backdrop_filter.rect = src.data.apply_backdrop_filter.rect;
             out_cmd->data.apply_backdrop_filter.radii = src.data.apply_backdrop_filter.radii;
@@ -157,6 +161,10 @@ API void paint_command_free(paint_command_t* cmd) {
         case PAINT_DRAW_BACKGROUND_IMAGE:
             std::free(cmd->data.draw_background_image.source);
             cmd->data.draw_background_image.source = nullptr;
+            break;
+        case PAINT_DRAW_IMAGE:
+            std::free(cmd->data.draw_image.source);
+            cmd->data.draw_image.source = nullptr;
             break;
         case PAINT_APPLY_BACKDROP_FILTER:
             backdrop_filter_list_free(&cmd->data.apply_backdrop_filter.filters);

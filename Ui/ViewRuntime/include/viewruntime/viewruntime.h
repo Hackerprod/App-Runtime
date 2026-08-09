@@ -351,6 +351,10 @@ typedef enum {
     PAINT_FILL_BORDER_SIDE,
     PAINT_DRAW_TEXT_SHADOW,
     PAINT_DRAW_BACKGROUND_IMAGE,
+    /* ImageView content: map source_rect of the source image into
+     * destination_rect (AOSP ImageView.configureBounds geometry), clipped to
+     * the painted view box. */
+    PAINT_DRAW_IMAGE,
     PAINT_APPLY_BACKDROP_FILTER,
     PAINT_PUSH_TRANSFORM,
     PAINT_POP_TRANSFORM,
@@ -387,6 +391,7 @@ typedef struct {
                  int32_t repeat_x; int32_t repeat_y; float opacity;
                  rectf source_rect; rectf destination_rect;
                  bool_t has_resolved_geometry; } draw_background_image;
+        struct { char* source; rectf source_rect; rectf destination_rect; } draw_image;
         struct { rectf rect; corner_radii radii;
                  backdrop_filter_list filters; } apply_backdrop_filter;
         struct { transform_matrix matrix; } push_transform;

@@ -15,6 +15,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace viewruntime_backend {
@@ -42,6 +44,12 @@ static int utf16_decode(const uint16_t* s, int len, int i, unsigned int* out) {
 
 /* ── Surface ───────────────────────────────────────────────────────── */
 
+struct Image {
+    int width = 0;
+    int height = 0;
+    std::vector<uint32_t> pixels; /* straight ARGB8888 */
+};
+
 struct Surface {
     int width = 0;
     int height = 0;
@@ -51,7 +59,16 @@ struct Surface {
     stbtt_fontinfo* font = nullptr;
     uint8_t* font_data = nullptr;
     size_t font_data_size = 0;
+
+    std::vector<std::pair<std::string, Image>> images; /* source -> bitmap */
 };
+
+static Image* find_image(Surface* s, const char* source) {
+    for (auto& entry : s->images) {
+        if (entry.first == source) return &entry.second;
+    }
+    return nullptr;
+}
 
 static uint32_t pack_color(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
     return (static_cast<uint32_t>(a) << 24) |
@@ -228,11 +245,41 @@ static void measure_text_common(Surface* s, const uint16_t* text, int len,
     if (out_baseline) *out_baseline = baseline;
 }
 
+/* Blit an uploaded image: map src rect (image pixel coords) into dst rect
+ * (surface coords) with nearest-neighbor scaling, clipped to the surface. */
+static void draw_image(Surface* s, const Image& img,
+                       float src_x, float src_y, float src_w, float src_h,
+                       float dst_x, float dst_y, float dst_w, float dst_h) {
+    if (src_w <= 0.f || src_h <= 0.f || dst_w <= 0.f || dst_h <= 0.f) return;
+    const int x0 = static_cast<int>(std::floor(dst_x));
+    const int y0 = static_cast<int>(std::floor(dst_y));
+    const int x1 = static_cast<int>(std::ceil(dst_x + dst_w));
+    const int y1 = static_cast<int>(std::ceil(dst_y + dst_h));
+    const int cx0 = std::max(0, x0);
+    const int cy0 = std::max(0, y0);
+    const int cx1 = std::min(s->width, x1);
+    const int cy1 = std::min(s->height, y1);
+
+    for (int py = cy0; py < cy1; ++py) {
+        const int iy = static_cast<int>((static_cast<float>(py) - dst_y) * src_h / dst_h);
+        if (iy < 0 || iy >= img.height) continue;
+        const uint32_t* src_row = &img.pixels[static_cast<size_t>(iy) * img.width];
+        uint32_t* dst_row = &s->pixels[static_cast<size_t>(py) * s->width];
+        for (int px = cx0; px < cx1; ++px) {
+            const int ix = static_cast<int>((static_cast<float>(px) - dst_x) * src_w / dst_w);
+            if (ix < 0 || ix >= img.width) continue;
+            blend_pixel(&dst_row[px], src_row[ix]);
+        }
+    }
+}
+
 } // namespace viewruntime_backend
 
 /* ── C ABI ─────────────────────────────────────────────────────────── */
 
+using viewruntime_backend::Image;
 using viewruntime_backend::Surface;
+using viewruntime_backend::pack_color;
 
 extern "C" {
 
@@ -360,6 +407,44 @@ VIEWRUNTIME_BACKEND_API void viewruntime_draw_text(
         previous = static_cast<int>(cp);
     }
     (void)clip_x0; (void)clip_y0; (void)clip_x1; (void)clip_y1;
+}
+
+VIEWRUNTIME_BACKEND_API void viewruntime_surface_set_image(
+    void* surface, const char* source, int width, int height,
+    const uint8_t* argb_pixels) {
+    Surface* s = static_cast<Surface*>(surface);
+    if (!s || !source || !argb_pixels || width <= 0 || height <= 0) return;
+    Image img;
+    img.width = width;
+    img.height = height;
+    img.pixels.resize(static_cast<size_t>(width) * height);
+    /* Incoming bytes are ARGB8888 (A,R,G,B in memory); the surface stores
+     * packed (a<<24)|(r<<16)|(g<<8)|b, so convert per pixel instead of
+     * memcpy (which would byte-swap on little-endian hosts). */
+    for (size_t i = 0; i < img.pixels.size(); ++i) {
+        const uint8_t* p = argb_pixels + i * 4;
+        img.pixels[i] = pack_color(p[0], p[1], p[2], p[3]);
+    }
+    for (auto& entry : s->images) {
+        if (entry.first == source) {
+            entry.second = std::move(img);
+            return;
+        }
+    }
+    s->images.emplace_back(std::string(source), std::move(img));
+}
+
+VIEWRUNTIME_BACKEND_API void viewruntime_draw_image(
+    void* surface, const char* source,
+    float src_x, float src_y, float src_w, float src_h,
+    float dst_x, float dst_y, float dst_w, float dst_h,
+    int32_t /*view_id*/) {
+    Surface* s = static_cast<Surface*>(surface);
+    if (!s || !source || s->pixels.empty()) return;
+    const viewruntime_backend::Image* img = viewruntime_backend::find_image(s, source);
+    if (img == nullptr) return;
+    viewruntime_backend::draw_image(s, *img, src_x, src_y, src_w, src_h,
+                                    dst_x, dst_y, dst_w, dst_h);
 }
 
 VIEWRUNTIME_BACKEND_API void viewruntime_frame_end(void* surface) {

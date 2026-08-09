@@ -135,11 +135,13 @@ static void test_image_record() {
     EXPECT(display_list_get_count(list) == 1);
     paint_command_t cmd{};
     display_list_get_command(list, 0, &cmd);
-    EXPECT(cmd.tag == PAINT_DRAW_BACKGROUND_IMAGE);
-    EXPECT(cmd.data.draw_background_image.has_resolved_geometry == TRUE);
-    /* FIT_CENTER: scale = min(200/100, 100/50) = 2 -> 200x100 */
-    EXPECT_NEAR(cmd.data.draw_background_image.destination_rect.width, 200.0, 0.01);
-    EXPECT_NEAR(cmd.data.draw_background_image.destination_rect.height, 100.0, 0.01);
+    EXPECT(cmd.tag == PAINT_DRAW_IMAGE);
+    /* intrinsic 100x50 mapped into the 200x100 view: source is the full
+     * image, FIT_CENTER scales by 2 -> 200x100 destination */
+    EXPECT_NEAR(cmd.data.draw_image.source_rect.width, 100.0, 0.01);
+    EXPECT_NEAR(cmd.data.draw_image.source_rect.height, 50.0, 0.01);
+    EXPECT_NEAR(cmd.data.draw_image.destination_rect.width, 200.0, 0.01);
+    EXPECT_NEAR(cmd.data.draw_image.destination_rect.height, 100.0, 0.01);
     paint_command_free(&cmd);
     display_list_destroy(list);
     android_ui_destroy(ui);

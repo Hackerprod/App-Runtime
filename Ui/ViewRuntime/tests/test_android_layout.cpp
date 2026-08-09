@@ -3,6 +3,10 @@
 
 #include "android_test_util.h"
 
+#include "../src/android/android_types.h"
+
+#include <cstring>
+
 static void test_frame_gravity_bottom_right() {
     android_ui_t ui = make_ui();
     android_view_t frame = make_view(ui, ANDROID_VIEW_FRAME_LAYOUT);
@@ -527,6 +531,117 @@ static void test_linear_default_margins() {
     android_ui_destroy(ui);
 }
 
+/* ── ImageView (AOSP onMeasure + configureBounds) ─────────────────── */
+
+static bool_t fake_image_dimensions(const char* source, sizef* out_size, void*) {
+    if (std::strcmp(source, "img100x50") == 0) {
+        *out_size = {100.f, 50.f};
+        return TRUE;
+    }
+    if (std::strcmp(source, "img100x100") == 0) {
+        *out_size = {100.f, 100.f};
+        return TRUE;
+    }
+    if (std::strcmp(source, "img200x100") == 0) {
+        *out_size = {200.f, 100.f};
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/* adjustViewBounds: a wrap-content ImageView preserves the drawable aspect
+ * ratio (100x50) inside a wrap-content frame. */
+static void test_image_adjust_view_bounds() {
+    android_ui_t ui = make_ui();
+    android_ui_set_image_dimensions(ui, fake_image_dimensions, nullptr);
+    android_view_t frame = make_view(ui, ANDROID_VIEW_FRAME_LAYOUT);
+    set_wrap(frame);
+    android_view_t image = make_view(ui, ANDROID_VIEW_IMAGE_VIEW);
+    set_wrap(image);
+    android_view_set_image_source(image, "img100x50");
+    android_view_set_adjust_view_bounds(image, TRUE);
+    android_view_add_child(ui, frame, image);
+    frame_and_layout(ui, frame, 400.f, 400.f);
+    sizef is{};
+    android_view_get_measured_size(image, &is);
+    EXPECT_NEAR(is.width, 100.f, 0.5f);
+    EXPECT_NEAR(is.height, 50.f, 0.5f);
+    android_ui_destroy(ui);
+}
+
+/* adjustViewBounds + maxWidth (60dp = 120px): an image larger than the max
+ * (200x100) is clamped to 120px wide and the height follows the aspect
+ * ratio (120x60). */
+static void test_image_max_width() {
+    android_ui_t ui = make_ui();
+    android_ui_set_image_dimensions(ui, fake_image_dimensions, nullptr);
+    android_view_t frame = make_view(ui, ANDROID_VIEW_FRAME_LAYOUT);
+    set_wrap(frame);
+    android_view_t image = make_view(ui, ANDROID_VIEW_IMAGE_VIEW);
+    set_wrap(image);
+    android_view_set_image_source(image, "img200x100");
+    android_view_set_adjust_view_bounds(image, TRUE);
+    android_view_set_max_image_size_dp(image, 60.f, 0.f);
+    android_view_add_child(ui, frame, image);
+    frame_and_layout(ui, frame, 400.f, 400.f);
+    sizef is{};
+    android_view_get_measured_size(image, &is);
+    EXPECT_NEAR(is.width, 120.f, 0.5f);
+    EXPECT_NEAR(is.height, 60.f, 0.5f);
+    android_ui_destroy(ui);
+}
+
+/* CENTER_CROP geometry: a 100x100 image in a 100x50 view keeps its aspect,
+ * scales to fill (scale 1) and is vertically centered (dst y = -25). */
+static void test_image_center_crop_geometry() {
+    android_ui_t ui = make_ui();
+    android_ui_set_image_dimensions(ui, fake_image_dimensions, nullptr);
+    android_view_t image = make_view(ui, ANDROID_VIEW_IMAGE_VIEW);
+    android_layout_params_t lp{};
+    lp.width.kind = ANDROID_SIZE_KIND_EXACT; lp.width.value_dp = 50.f;
+    lp.height.kind = ANDROID_SIZE_KIND_EXACT; lp.height.value_dp = 25.f;
+    android_view_set_layout_params(image, &lp);
+    android_view_set_image_source(image, "img100x100");
+    android_view_set_scale_type(image, ANDROID_SCALE_CENTER_CROP);
+    frame_and_layout(ui, image, 100.f, 50.f);
+    EXPECT_NEAR(image->image_dst_rect.width, 100.f, 0.5f);
+    EXPECT_NEAR(image->image_dst_rect.height, 100.f, 0.5f);
+    EXPECT_NEAR(image->image_dst_rect.y, -25.f, 0.5f); /* crop offset */
+    EXPECT_NEAR(image->image_dst_rect.x, 0.f, 0.5f);
+    android_ui_destroy(ui);
+}
+
+/* The display list carries a PAINT_DRAW_IMAGE command with the resolved
+ * source/destination rectangles. */
+static void test_image_draw_command() {
+    android_ui_t ui = make_ui();
+    android_ui_set_image_dimensions(ui, fake_image_dimensions, nullptr);
+    android_view_t image = make_view(ui, ANDROID_VIEW_IMAGE_VIEW);
+    set_wrap(image);
+    android_view_set_image_source(image, "img100x50");
+    frame_and_layout(ui, image, 200.f, 100.f);
+
+    display_list_t list = nullptr;
+    EXPECT(android_ui_record(ui, image, &list) == OK);
+    bool found = false;
+    const int32_t count = display_list_get_count(list);
+    for (int32_t i = 0; i < count; ++i) {
+        paint_command_t cmd{};
+        if (display_list_get_command(list, i, &cmd) != OK) continue;
+        if (cmd.tag == PAINT_DRAW_IMAGE) {
+            found = true;
+            EXPECT_NEAR(cmd.data.draw_image.source_rect.width, 100.f, 0.5f);
+            EXPECT_NEAR(cmd.data.draw_image.source_rect.height, 50.f, 0.5f);
+            paint_command_free(&cmd);
+            break;
+        }
+        paint_command_free(&cmd);
+    }
+    EXPECT(found);
+    display_list_destroy(list);
+    android_ui_destroy(ui);
+}
+
 int main() {
     test_frame_gravity_bottom_right();
     test_frame_gravity_center();
@@ -546,5 +661,9 @@ int main() {
     test_constraint_layout_ratio();
     test_constraint_layout_barrier();
     test_constraint_layout_start_end();
+    test_image_adjust_view_bounds();
+    test_image_max_width();
+    test_image_center_crop_geometry();
+    test_image_draw_command();
     return test_result();
 }

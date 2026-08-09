@@ -532,11 +532,27 @@ API status_t android_view_set_image_source(
 API status_t android_view_set_scale_type(
     android_view_t view, int32_t scale_type) {
     if (!view) return ERROR_NULL_ARG;
-    if (scale_type < ANDROID_SCALE_FIT_CENTER ||
+    if (scale_type < ANDROID_SCALE_MATRIX ||
         scale_type > ANDROID_SCALE_CENTER_INSIDE) {
         return ERROR_INVALID_STATE;
     }
     view->scale_type = scale_type;
+    return OK;
+}
+
+API status_t android_view_set_adjust_view_bounds(
+    android_view_t view, bool_t adjust) {
+    if (!view) return ERROR_NULL_ARG;
+    view->adjust_view_bounds = adjust != FALSE;
+    return OK;
+}
+
+API status_t android_view_set_max_image_size_dp(
+    android_view_t view, float max_width_dp, float max_height_dp) {
+    if (!view) return ERROR_NULL_ARG;
+    if (max_width_dp < 0.f || max_height_dp < 0.f) return ERROR_INVALID_STATE;
+    view->max_width_dp = max_width_dp;
+    view->max_height_dp = max_height_dp;
     return OK;
 }
 

@@ -125,10 +125,81 @@ static void test_resize_clears() {
     viewruntime_surface_destroy(surface);
 }
 
+/* Upload a 2x2 image (red top-left, green top-right, blue bottom-left,
+ * white bottom-right) and draw it scaled into a 4x4 destination. */
+static void test_draw_image_scaled() {
+    void* surface = viewruntime_surface_create(nullptr);
+    viewruntime_surface_resize(surface, 8, 8, 1.f);
+
+    const uint8_t argb[16] = {
+        255, 255, 0, 0,    /* A,R,G,B: red */
+        255, 0, 255, 0,    /* green */
+        255, 0, 0, 255,    /* blue */
+        255, 255, 255, 255 /* white */
+    };
+    viewruntime_surface_set_image(surface, "img2x2", 2, 2, argb);
+
+    viewruntime_frame_begin(surface);
+    /* full image mapped into (1,1,4x4): 2x scale, nearest neighbor */
+    viewruntime_draw_image(surface, "img2x2", 0.f, 0.f, 2.f, 2.f,
+                           1.f, 1.f, 4.f, 4.f, 5);
+
+    const uint8_t* px = nullptr;
+    int pitch = 0, w = 0, h = 0;
+    viewruntime_surface_pixels(surface, &px, &pitch, &w, &h);
+
+    /* dst pixel at (1,1) = src (0,0) = red: b=0,g=0,r=255,a=255 */
+    std::fprintf(stderr, "IMG: p(1,1)=%d,%d,%d,%d p(3,3)=%d,%d,%d,%d\n",
+                 px[1 * pitch + 1 * 4 + 0], px[1 * pitch + 1 * 4 + 1],
+                 px[1 * pitch + 1 * 4 + 2], px[1 * pitch + 1 * 4 + 3],
+                 px[3 * pitch + 3 * 4 + 0], px[3 * pitch + 3 * 4 + 1],
+                 px[3 * pitch + 3 * 4 + 2], px[3 * pitch + 3 * 4 + 3]);
+    const uint8_t* p00 = px + 1 * pitch + 1 * 4;
+    EXPECT(p00[0] == 0 && p00[1] == 0 && p00[2] == 255 && p00[3] == 255);
+    /* dst pixel at (3,3) = src (1,1) = white (2x scale from dst (1,1)) */
+    const uint8_t* p11 = px + 3 * pitch + 3 * 4;
+    EXPECT(p11[0] == 255 && p11[1] == 255 && p11[2] == 255 && p11[3] == 255);
+    /* outside the destination stays transparent */
+    EXPECT(px[7 * pitch + 7 * 4 + 3] == 0);
+
+    viewruntime_surface_destroy(surface);
+}
+
+/* Source-rect cropping: only the top-left half of the image is drawn. */
+static void test_draw_image_cropped() {
+    void* surface = viewruntime_surface_create(nullptr);
+    viewruntime_surface_resize(surface, 8, 8, 1.f);
+
+    const uint8_t argb[16] = {
+        255, 255, 0, 0,
+        255, 0, 255, 0,
+        255, 0, 0, 255,
+        255, 255, 255, 255
+    };
+    viewruntime_surface_set_image(surface, "img2x2", 2, 2, argb);
+
+    viewruntime_frame_begin(surface);
+    /* src (0,0,1x1) = just the red pixel -> 2x2 dst at (0,0) */
+    viewruntime_draw_image(surface, "img2x2", 0.f, 0.f, 1.f, 1.f,
+                           0.f, 0.f, 2.f, 2.f, 6);
+
+    const uint8_t* px = nullptr;
+    int pitch = 0, w = 0, h = 0;
+    viewruntime_surface_pixels(surface, &px, &pitch, &w, &h);
+    const uint8_t* p = px + 1 * pitch + 1 * 4;
+    EXPECT(p[0] == 0 && p[1] == 0 && p[2] == 255 && p[3] == 255); /* red */
+    /* the green half was cropped away */
+    const uint8_t* g = px + 1 * pitch + 3 * 4;
+    EXPECT(g[3] == 0);
+    viewruntime_surface_destroy(surface);
+}
+
 int main() {
     test_fill_rect_pixels();
     test_draw_text_paints_pixels();
     test_measure_draw_consistency();
     test_resize_clears();
+    test_draw_image_scaled();
+    test_draw_image_cropped();
     return test_result();
 }

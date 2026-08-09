@@ -22,17 +22,20 @@ android_measured_size_t measure_constraint(
 void apply_gravity(int32_t gravity, float child_w, float child_h,
                    float container_w, float container_h,
                    float* out_x, float* out_y) {
+    /* LTR runtime: START resolves to LEFT, END to RIGHT (AOSP applies the
+     * layout direction to the relative bits before layout). */
+    const int32_t g = gravity_normalize_ltr(gravity);
     float x = 0.f, y = 0.f;
-    if (gravity_has(gravity, ANDROID_GRAVITY_RIGHT)) {
+    if (gravity_has(g, ANDROID_GRAVITY_RIGHT)) {
         x = container_w - child_w;
-    } else if (gravity_has(gravity, ANDROID_GRAVITY_CENTER_HORIZONTAL) ||
-               gravity_has(gravity, ANDROID_GRAVITY_CENTER)) {
+    } else if (gravity_has(g, ANDROID_GRAVITY_CENTER_HORIZONTAL) ||
+               gravity_has(g, ANDROID_GRAVITY_CENTER)) {
         x = (container_w - child_w) * 0.5f;
     }
-    if (gravity_has(gravity, ANDROID_GRAVITY_BOTTOM)) {
+    if (gravity_has(g, ANDROID_GRAVITY_BOTTOM)) {
         y = container_h - child_h;
-    } else if (gravity_has(gravity, ANDROID_GRAVITY_CENTER_VERTICAL) ||
-               gravity_has(gravity, ANDROID_GRAVITY_CENTER)) {
+    } else if (gravity_has(g, ANDROID_GRAVITY_CENTER_VERTICAL) ||
+               gravity_has(g, ANDROID_GRAVITY_CENTER)) {
         y = (container_h - child_h) * 0.5f;
     }
     *out_x = x < 0.f ? 0.f : x;
@@ -98,22 +101,195 @@ android_measured_size_t measure_checkable(
     return result;
 }
 
+/* AOSP ImageView.resolveAdjustedSize: clamp the desired size to the imposed
+ * max and the parent spec. */
+static float image_resolve_adjusted_size(float desired_size, float max_size,
+                                         android_measure_spec_t spec) {
+    switch (spec.mode) {
+        case ANDROID_MEASURE_UNSPECIFIED:
+            return max_size > 0.f ? std::min(desired_size, max_size) : desired_size;
+        case ANDROID_MEASURE_AT_MOST:
+            return std::min(std::min(desired_size, spec.size),
+                            max_size > 0.f ? max_size : spec.size);
+        case ANDROID_MEASURE_EXACTLY:
+        default:
+            return spec.size;
+    }
+}
+
+/* AOSP ImageView.configureBounds: compute the source/destination mapping for
+ * the given scale type. The intrinsic image (dwidth x dheight) is placed into
+ * the content area (vwidth x vheight) exactly like Android's drawMatrix. */
+static void image_configure_bounds(android_view_s* view, float dwidth, float dheight,
+                                   float vwidth, float vheight) {
+    view->image_src_rect = {0.f, 0.f, dwidth, dheight};
+    view->image_has_geometry = true;
+
+    const bool fits = (dwidth <= 0.f || vwidth == dwidth) &&
+                      (dheight <= 0.f || vheight == dheight);
+
+    if (dwidth <= 0.f || dheight <= 0.f ||
+        view->scale_type == ANDROID_SCALE_FIT_XY) {
+        /* no intrinsic size or FIT_XY: fill the view */
+        view->image_dst_rect = {0.f, 0.f, vwidth, vheight};
+        return;
+    }
+
+    if (fits || view->scale_type == ANDROID_SCALE_MATRIX) {
+        /* no transform needed (identity matrix) */
+        view->image_dst_rect = {0.f, 0.f, dwidth, dheight};
+        return;
+    }
+
+    switch (view->scale_type) {
+        case ANDROID_SCALE_CENTER: {
+            const float dx = std::round((vwidth - dwidth) * 0.5f);
+            const float dy = std::round((vheight - dheight) * 0.5f);
+            view->image_dst_rect = {dx, dy, dwidth, dheight};
+            break;
+        }
+        case ANDROID_SCALE_CENTER_CROP: {
+            float scale, dx = 0.f, dy = 0.f;
+            if (dwidth * vheight > vwidth * dheight) {
+                scale = vheight / dheight;
+                dx = (vwidth - dwidth * scale) * 0.5f;
+            } else {
+                scale = vwidth / dwidth;
+                dy = (vheight - dheight * scale) * 0.5f;
+            }
+            view->image_dst_rect = {std::round(dx), std::round(dy),
+                                    dwidth * scale, dheight * scale};
+            break;
+        }
+        case ANDROID_SCALE_CENTER_INSIDE: {
+            float scale = 1.f;
+            if (dwidth > vwidth || dheight > vheight) {
+                scale = std::min(vwidth / dwidth, vheight / dheight);
+            }
+            const float dx = std::round((vwidth - dwidth * scale) * 0.5f);
+            const float dy = std::round((vheight - dheight * scale) * 0.5f);
+            view->image_dst_rect = {dx, dy, dwidth * scale, dheight * scale};
+            break;
+        }
+        case ANDROID_SCALE_FIT_START:
+        case ANDROID_SCALE_FIT_CENTER:
+        case ANDROID_SCALE_FIT_END: {
+            /* Matrix.ScaleToFit START/CENTER/END on the rectToRect mapping */
+            const float scale = std::min(vwidth / dwidth, vheight / dheight);
+            float dx = 0.f, dy = 0.f;
+            if (view->scale_type == ANDROID_SCALE_FIT_CENTER) {
+                dx = (vwidth - dwidth * scale) * 0.5f;
+                dy = (vheight - dheight * scale) * 0.5f;
+            } else if (view->scale_type == ANDROID_SCALE_FIT_END) {
+                dx = vwidth - dwidth * scale;
+                dy = vheight - dheight * scale;
+            }
+            view->image_dst_rect = {dx, dy, dwidth * scale, dheight * scale};
+            break;
+        }
+        default:
+            view->image_dst_rect = {0.f, 0.f, vwidth, vheight};
+            break;
+    }
+}
+
+/* Port of AOSP ImageView.onMeasure: intrinsic size from the host dimensions
+ * hook, adjustViewBounds aspect-ratio fitting, maxWidth/maxHeight clamps. */
 android_measured_size_t measure_image(
     android_view_s* view, android_measure_spec_t spec_w,
     android_measure_spec_t spec_h, const android_ui_s* ui) {
     sizef intrinsic{0.f, 0.f};
     bool has_size = false;
-    if (ui->image_dimensions && !view->image_source.empty()) {
-        has_size = ui->image_dimensions(view->image_source.c_str(), &intrinsic, ui->image_dimensions_data) == TRUE;
+    /* Prefer the real decoded bitmap size (Phase 2 pipeline: bytes fetched
+     * through the bridge and decoded by ViewRuntime). */
+    if (!view->image_source.empty()) {
+        float iw = 0.f, ih = 0.f;
+        if (viewruntime::android::image_dimensions_from_cache(
+                ui, view->image_source, &iw, &ih) && iw > 0.f && ih > 0.f) {
+            intrinsic.width = iw;
+            intrinsic.height = ih;
+            has_size = true;
+        }
     }
-    float desired_w = has_size ? intrinsic.width : dp(ui, view->min_width_dp);
-    float desired_h = has_size ? intrinsic.height : dp(ui, view->min_height_dp);
-    desired_w += padding_h(view, ui);
-    desired_h += padding_v(view, ui);
-    const android_measured_size_t result{resolve_size(desired_w, spec_w),
-                                                resolve_size(desired_h, spec_h)};
+    if (!has_size && ui->image_dimensions && !view->image_source.empty()) {
+        has_size = ui->image_dimensions(view->image_source.c_str(), &intrinsic,
+                                        ui->image_dimensions_data) == TRUE;
+    }
+
+    float w = has_size ? intrinsic.width : 0.f;
+    float h = has_size ? intrinsic.height : 0.f;
+    const float max_w = dp(ui, view->max_width_dp);
+    const float max_h = dp(ui, view->max_height_dp);
+
+    float desired_aspect = 0.f;
+    bool resize_width = false;
+    bool resize_height = false;
+
+    if (has_size) {
+        if (w <= 0.f) w = 1.f;
+        if (h <= 0.f) h = 1.f;
+        if (view->adjust_view_bounds) {
+            resize_width = spec_w.mode != ANDROID_MEASURE_EXACTLY;
+            resize_height = spec_h.mode != ANDROID_MEASURE_EXACTLY;
+            desired_aspect = w / h;
+        }
+    } else {
+        w = h = 0.f;
+    }
+
+    const float pleft = dp(ui, view->padding_left_dp), pright = dp(ui, view->padding_right_dp);
+    const float ptop = dp(ui, view->padding_top_dp), pbottom = dp(ui, view->padding_bottom_dp);
+
+    float width_size;
+    float height_size;
+
+    if (resize_width || resize_height) {
+        /* AOSP resolveAdjustedSize with the imposed max */
+        width_size = image_resolve_adjusted_size(w + pleft + pright, max_w, spec_w);
+        height_size = image_resolve_adjusted_size(h + ptop + pbottom, max_h, spec_h);
+
+        if (desired_aspect != 0.f) {
+            const float actual_aspect =
+                (width_size - pleft - pright) / (height_size - ptop - pbottom);
+            if (std::fabs(actual_aspect - desired_aspect) > 0.0000001f) {
+                bool done = false;
+                if (resize_width) {
+                    const float new_width =
+                        desired_aspect * (height_size - ptop - pbottom) + pleft + pright;
+                    if (new_width <= width_size) {
+                        width_size = new_width;
+                        done = true;
+                    }
+                }
+                if (!done && resize_height) {
+                    const float new_height =
+                        (width_size - pleft - pright) / desired_aspect + ptop + pbottom;
+                    if (new_height <= height_size) {
+                        height_size = new_height;
+                    }
+                }
+            }
+        }
+    } else {
+        w += pleft + pright;
+        h += ptop + pbottom;
+        w = std::max(w, dp(ui, view->min_width_dp));
+        h = std::max(h, dp(ui, view->min_height_dp));
+        width_size = resolve_size(w, spec_w);
+        height_size = resolve_size(h, spec_h);
+    }
+
+    /* resolve the draw geometry against the measured content box */
+    if (has_size) {
+        image_configure_bounds(view, intrinsic.width, intrinsic.height,
+                               std::max(0.f, width_size - pleft - pright),
+                               std::max(0.f, height_size - ptop - pbottom));
+    } else {
+        view->image_has_geometry = false;
+    }
+
     view->measured_baseline = -1.f;
-    return result;
+    return {width_size, height_size};
 }
 
 android_measured_size_t measure_progress(
@@ -1142,7 +1318,8 @@ void layout_linear(android_view_s* view, float x, float y, float w, float h,
             run_offset = (h - pad_top - pad_bottom - total) * 0.5f;
         }
     } else {
-        const int32_t hmask = container_gravity & ANDROID_GRAVITY_FILL_HORIZONTAL;
+        const int32_t container_gravity_norm = gravity_normalize_ltr(container_gravity);
+        const int32_t hmask = container_gravity_norm & ANDROID_GRAVITY_FILL_HORIZONTAL;
         /* RIGHT, or the default START/LEFT gravity resolved to RIGHT in RTL
          * (the runtime has no RELATIVE_HORIZONTAL bit, so LEFT is treated as
          * the LinearLayout default START). */
@@ -1169,9 +1346,9 @@ void layout_linear(android_view_s* view, float x, float y, float w, float h,
         const float m_main_end = (vertical ? m_bottom : m_right) == 0.f && view->use_default_margins
             ? default_main_margin : (vertical ? m_bottom : m_right);
         const float cw = child->measured.width, ch = child->measured.height;
-        const int32_t gravity = child->lp.gravity != ANDROID_GRAVITY_NO_GRAVITY
-            ? child->lp.gravity : container_gravity;
-
+        const int32_t gravity = gravity_normalize_ltr(
+            child->lp.gravity != ANDROID_GRAVITY_NO_GRAVITY
+                ? child->lp.gravity : container_gravity);
         float cx = x, cy = y;
         if (vertical) {
             /* divider before this child (AOSP layoutVertical) */

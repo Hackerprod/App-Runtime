@@ -17,11 +17,13 @@ add_library(viewruntime_core SHARED
     src/css/css_length.cpp
     src/css/color_rgba.cpp
     src/android/android_views.cpp
+    src/android/android_inflate.cpp
     src/android/android_measure_layout.cpp
     src/android/android_list.cpp
     src/android/constraint_solver.cpp
     src/android/constraint_widget.cpp
     src/android/stb_text_measurer.cpp
+    src/android/android_image_decode.cpp
     src/android/viewruntime_backend.cpp
     src/android/android_grid_layout.cpp
     src/android/android_display_list.cpp
@@ -90,6 +92,10 @@ if(VIEWRUNTIME_BUILD_TESTS)
     add_executable(android_api_test tests/test_android_api.cpp)
     target_link_libraries(android_api_test PRIVATE ViewRuntime::Core)
     add_test(NAME viewruntime.android-api COMMAND android_api_test)
+
+    add_executable(android_inflate_test tests/test_android_inflate.cpp)
+    target_link_libraries(android_inflate_test PRIVATE ViewRuntime::Core)
+    add_test(NAME viewruntime.android-inflate COMMAND android_inflate_test)
 
     add_executable(android_grid_test tests/test_android_grid.cpp)
     target_link_libraries(android_grid_test PRIVATE ViewRuntime::Core)

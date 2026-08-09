@@ -41,6 +41,21 @@ VIEWRUNTIME_BACKEND_API void viewruntime_draw_text(
     const uint16_t* utf16_text, int32_t text_len,
     float text_size_px, uint8_t a, uint8_t r, uint8_t g, uint8_t b,
     int32_t view_id);
+/* Upload (or replace) a decoded image under `source`. Pixels are straight
+ * ARGB8888, row-major, width*4 pitch. The surface owns a copy; call again
+ * with the same source to update it. */
+VIEWRUNTIME_BACKEND_API void viewruntime_surface_set_image(
+    void* surface, const char* source, int width, int height,
+    const uint8_t* argb_pixels);
+/* Draw an image: map the source rect (in image pixel coordinates) into the
+ * destination rect (in surface coordinates), scaled, clipped to the surface.
+ * Matches AOSP ImageView.configureBounds geometry when the caller passes the
+ * resolved src/dst rects. */
+VIEWRUNTIME_BACKEND_API void viewruntime_draw_image(
+    void* surface, const char* source,
+    float src_x, float src_y, float src_w, float src_h,
+    float dst_x, float dst_y, float dst_w, float dst_h,
+    int32_t view_id);
 VIEWRUNTIME_BACKEND_API void viewruntime_frame_end(void* surface);
 
 /* Text measurement — same font/metrics path as viewruntime_draw_text. */
