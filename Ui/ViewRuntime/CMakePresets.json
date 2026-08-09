@@ -1,0 +1,62 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "dev",
+      "displayName": "ViewRuntime native development",
+      "binaryDir": "${sourceDir}/build/dev",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "VIEWRUNTIME_BUILD_TESTS": "ON",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/dev/install"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "ViewRuntime native release",
+      "binaryDir": "${sourceDir}/build/release-package",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "VIEWRUNTIME_BUILD_TESTS": "ON",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/release-package/install"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "configuration": "Debug"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

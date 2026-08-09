@@ -7,3 +7,6 @@ artifacts/
 .atl/
 .claude/
 TestResults/
+
+# ViewRuntime (native CMake project) build output
+Ui/ViewRuntime/build/

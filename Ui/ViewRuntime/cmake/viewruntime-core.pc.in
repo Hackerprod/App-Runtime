@@ -1,0 +1,10 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: ViewRuntime
+Description: ViewRuntime Android UI rendering core
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lviewruntime_core
+Cflags: -I${includedir}
