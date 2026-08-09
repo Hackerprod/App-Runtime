@@ -115,6 +115,12 @@ public static class AndroidApiBindings
 			state.WeakHashMaps.Add(Receiver(args), new WeakHashMapPeer());
 			return null!;
 		});
+		builder.Register(Api("Ljava/util/WeakHashMap;", "<init>", "(I)V"), delegate(AndroidApiInvocation _, object[] args)
+		{
+			RequireInt(args[1]);
+			state.WeakHashMaps.Add(Receiver(args), new WeakHashMapPeer());
+			return null!;
+		});
 		builder.Register(Api("Ljava/util/WeakHashMap;", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			WeakHashMapPeer weakHashMapPeer = state.WeakHashMaps.Get(Receiver(args));
