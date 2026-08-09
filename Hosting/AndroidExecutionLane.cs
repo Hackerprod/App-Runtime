@@ -29,6 +29,28 @@ internal sealed class AndroidExecutionLane : IAsyncDisposable
 
     public bool IsCurrentThread => Environment.CurrentManagedThreadId == Volatile.Read(ref _threadId);
 
+    /// <summary>
+    /// Fire-and-forget enqueue onto the lane's own queue (the lane IS the main
+    /// message loop — android.os.Handler.post on the main Looper routes here).
+    /// Returns false if the lane is disposed. Unlike InvokeAsync there is no
+    /// completion signal: a posted action runs on the lane thread when reached.
+    /// </summary>
+    public bool TryPost(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        if (Volatile.Read(ref _disposeState) != 0)
+            return false;
+        try
+        {
+            _queue.Add(action);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     public Task<T> InvokeAsync<T>(Func<T> action, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(action);

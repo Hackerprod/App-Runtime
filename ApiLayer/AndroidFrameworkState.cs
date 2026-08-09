@@ -1,5 +1,7 @@
 #nullable enable
+using System.Collections.Concurrent;
 using System.Text;
+using AndroidRuntime.Core.ApiLayer.Bindings;
 using AndroidRuntime.Core.Dex;
 using AndroidRuntime.Core.Hosting;
 using AndroidRuntime.Core.Apk;
@@ -9,7 +11,7 @@ namespace AndroidRuntime.Core.ApiLayer;
 
 public sealed record AndroidPeerLimits
 {
-    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64)
+    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256)
     {
         StringBuilders = maxStringBuilders;
         Bundles = maxBundles;
@@ -27,6 +29,10 @@ public sealed record AndroidPeerLimits
         Enums = maxEnums;
         AtomicIntegers = maxAtomicIntegers;
         Threads = maxThreads;
+        ExecutorServices = maxExecutorServices;
+        Futures = maxFutures;
+        Loopers = maxLoopers;
+        Handlers = maxHandlers;
         Validate();
     }
 
@@ -47,10 +53,14 @@ public sealed record AndroidPeerLimits
     public int Enums { get; }
     public int AtomicIntegers { get; }
     public int Threads { get; }
+    public int ExecutorServices { get; }
+    public int Futures { get; }
+    public int Loopers { get; }
+    public int Handlers { get; }
 
     public void Validate()
     {
-        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0)
+        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0)
             throw new ArgumentOutOfRangeException(nameof(AndroidPeerLimits), "Peer limits must be positive.");
     }
 }
@@ -132,9 +142,14 @@ public sealed class AndroidFrameworkState : IDisposable
         Enums = new AndroidPeerStore<EnumPeer>("Enum", PeerLimits.Enums);
         AtomicIntegers = new AndroidPeerStore<AtomicIntegerPeer>("AtomicInteger", PeerLimits.AtomicIntegers);
         Threads = new AndroidPeerStore<ThreadPeer>("Thread", PeerLimits.Threads);
+        ExecutorServices = new AndroidPeerStore<ExecutorServicePeer>("ExecutorService", PeerLimits.ExecutorServices, peer => peer.DisposeWorkers());
+        Futures = new AndroidPeerStore<FuturePeer>("Future", PeerLimits.Futures);
+        Loopers = new AndroidPeerStore<LooperPeer>("Looper", PeerLimits.Loopers, peer => peer.Quit());
+        Handlers = new AndroidPeerStore<HandlerPeer>("Handler", PeerLimits.Handlers);
         ApplicationContext = new DexObject("Landroid/app/Application;");
         LauncherIntent = new DexObject("Landroid/content/Intent;");
         Intents.Add(LauncherIntent, new IntentPeer { Action = "android.intent.action.MAIN" });
+        InitializeTimeUnitConstants();
     }
 
     public string SessionId { get; }
@@ -177,13 +192,40 @@ public sealed class AndroidFrameworkState : IDisposable
     internal AndroidPeerStore<EnumPeer> Enums { get; }
     internal AndroidPeerStore<AtomicIntegerPeer> AtomicIntegers { get; }
     internal AndroidPeerStore<ThreadPeer> Threads { get; }
+    internal AndroidPeerStore<ExecutorServicePeer> ExecutorServices { get; }
+    internal AndroidPeerStore<FuturePeer> Futures { get; }
+    internal AndroidPeerStore<LooperPeer> Loopers { get; }
+    internal AndroidPeerStore<HandlerPeer> Handlers { get; }
     /// <summary>The session's GIL: shared by the interpreter and every binding that
     /// must release it around real blocking (sleep/join/monitor-enter/class-init
     /// wait). AndroidAppRuntime replaces this with the execution lane's GIL.</summary>
     internal AndroidGil Gil { get; set; } = new();
+    /// <summary>The hosted execution lane, when the session runs under a host. The
+    /// main Looper's Handler.post reuses this lane's existing queue (the lane IS
+    /// already a message loop); null for standalone/synchronous sessions.</summary>
+    internal AndroidExecutionLane? Lane { get; set; }
     /// <summary>The session interpreter, attached after construction so bindings
     /// that spawn guest work (Thread.start) can dispatch into it.</summary>
     internal DexInterpreter? Interpreter { get; private set; }
+    /// <summary>Per-real-thread Looper association for Looper.prepare()/myLooper()/loop().</summary>
+    internal ConcurrentDictionary<int, DexObject> ThreadLoopers { get; } = new();
+    /// <summary>The stable main Looper peer (created lazily by getMainLooper).</summary>
+    internal DexObject? MainLooperObject { get; private set; }
+    internal LooperPeer? MainLooperPeer { get; private set; }
+    /// <summary>The stable guest Thread object for the main guest thread, seeded by
+    /// JavaLangThreadBindings.InitializeMainGuestThread before any guest code runs.</summary>
+    internal DexObject? MainThreadObject { get; set; }
+    /// <summary>Framework singleton objects for java.util.concurrent.TimeUnit constants.</summary>
+    internal DexObject[] TimeUnitObjects { get; private set; } = [];
+    internal IReadOnlyDictionary<string, DexObject> TimeUnitByName { get; private set; } = new Dictionary<string, DexObject>(StringComparer.Ordinal);
+    internal IReadOnlyDictionary<DexObject, TimeUnitConstantPeer> TimeUnitByObject { get; private set; } = new Dictionary<DexObject, TimeUnitConstantPeer>(ReferenceEqualityComparer.Instance);
+    /// <summary>The singleton guest ThreadFactory object returned by Executors.defaultThreadFactory().</summary>
+    internal DexObject? DefaultThreadFactory { get; set; }
+    /// <summary>Maps each synthetic pool worker Runnable to its owning pool so the
+    /// worker body binding can find it. Guarded by WorkerRunnablesGate; written at
+    /// worker spawn, read once by the worker thread on start.</summary>
+    internal Dictionary<DexObject, ExecutorServicePeer> WorkerRunnables { get; } = new(ReferenceEqualityComparer.Instance);
+    internal object WorkerRunnablesGate { get; } = new();
     internal ActivityWindowPeers WindowPeers { get; }
     internal DexObject? Activity { get; private set; }
     public void AttachActivity(DexObject activity)
@@ -204,6 +246,78 @@ public sealed class AndroidFrameworkState : IDisposable
     {
         ArgumentNullException.ThrowIfNull(interpreter);
         Interpreter = interpreter;
+        // Framework static-field reads (e.g. TimeUnit.SECONDS via sget) resolve
+        // through this hook: framework classes have no DEX <clinit>/field table.
+        interpreter.FrameworkStaticField = ResolveFrameworkStaticField;
+    }
+
+    /// <summary>Materializes the TimeUnit constants as stable framework singletons
+    /// (JDK enum semantics OUTSIDE the guest Enum machinery — see README). The
+    /// seven real JDK constants in ordinal order.</summary>
+    private void InitializeTimeUnitConstants()
+    {
+        var objects = new DexObject[TimeUnitDefinitions.Length];
+        var byName = new Dictionary<string, DexObject>(StringComparer.Ordinal);
+        var byObject = new Dictionary<DexObject, TimeUnitConstantPeer>(ReferenceEqualityComparer.Instance);
+        for (int index = 0; index < TimeUnitDefinitions.Length; index++)
+        {
+            var constant = new DexObject("Ljava/util/concurrent/TimeUnit;");
+            objects[index] = constant;
+            byName[TimeUnitDefinitions[index].Name] = constant;
+            byObject[constant] = new TimeUnitConstantPeer(TimeUnitDefinitions[index].Name, index, TimeUnitDefinitions[index].NanosPerUnit);
+        }
+        TimeUnitObjects = objects;
+        TimeUnitByName = byName;
+        TimeUnitByObject = byObject;
+    }
+
+    private static readonly (string Name, long NanosPerUnit)[] TimeUnitDefinitions =
+    [
+        ("NANOSECONDS", 1L),
+        ("MICROSECONDS", 1_000L),
+        ("MILLISECONDS", 1_000_000L),
+        ("SECONDS", 1_000_000_000L),
+        ("MINUTES", 60_000_000_000L),
+        ("HOURS", 3_600_000_000_000L),
+        ("DAYS", 86_400_000_000_000L)
+    ];
+
+    internal object? ResolveFrameworkStaticField(string classDescriptor, string fieldName)
+    {
+        if (classDescriptor == "Ljava/util/concurrent/TimeUnit;")
+            return TimeUnitByName.TryGetValue(fieldName, out var constant) ? constant : null;
+        return null;
+    }
+
+    /// <summary>Returns the stable main Looper peer, creating it lazily. Under a
+    /// hosted lane the main Looper dispatches onto the lane's own queue (the lane
+    /// already is a message loop); without a lane (standalone/tests) a dedicated
+    /// background pump drains a private queue so posts still run asynchronously.</summary>
+    internal DexObject EnsureMainLooper()
+    {
+        if (MainLooperObject is not null) return MainLooperObject;
+        var looper = new DexObject("Landroid/os/Looper;");
+        var peer = new LooperPeer { IsMain = true, Queue = new AndroidMessageQueue(), ThreadObject = MainThreadObject };
+        Loopers.Add(looper, peer);
+        MainLooperObject = looper;
+        MainLooperPeer = peer;
+        if (Lane is null)
+            peer.PumpThread = new Thread(() =>
+            {
+                try
+                {
+                    Gil.Enter();
+                    try { AndroidOsHandlerBindings.RunPump(this, peer); }
+                    finally { Gil.Exit(); }
+                }
+                catch (Exception error) { peer.TerminalException = error; }
+            })
+            {
+                IsBackground = true,
+                Name = "AndroidRuntime-MainLooper"
+            };
+        if (peer.PumpThread is not null) peer.PumpThread.Start();
+        return looper;
     }
 
     internal void DisposeUi() => Ui?.Dispose();
@@ -227,6 +341,10 @@ public sealed class AndroidFrameworkState : IDisposable
         Enums.Clear();
         AtomicIntegers.Clear();
         Threads.Clear();
+        ExecutorServices.Clear();
+        Futures.Clear();
+        Loopers.Clear();
+        Handlers.Clear();
         Activity = null;
         SystemServices?.Dispose();
     }
@@ -471,6 +589,103 @@ internal sealed class ThreadPeer
     }
 }
 
+/// <summary>Per-constant identity/scale for a java.util.concurrent.TimeUnit constant.
+/// TimeUnit is a JDK enum — the constants are framework singletons, deliberately
+/// OUTSIDE the guest Enum machinery (which only covers DEX-defined enums).</summary>
+internal sealed record TimeUnitConstantPeer(string Name, int Ordinal, long NanosPerUnit);
+
+/// <summary>
+/// Completion/state for a guest java.util.concurrent.Future. State transitions:
+/// 0 pending, 1 running, 2 done, 3 cancelled. Completion is a ManualResetEvent so
+/// Future.get() genuinely blocks (releasing the GIL) like Thread.join does.
+/// </summary>
+internal sealed class FuturePeer
+{
+    internal DexObject? Runnable { get; set; }
+    internal DexObject? Callable { get; set; }
+    internal ManualResetEventSlim Completion { get; } = new(false);
+    private int _state;
+    internal int State { get => Volatile.Read(ref _state); set => Volatile.Write(ref _state, value); }
+    internal object? Result { get; set; }
+    internal Thread? RunningClrThread { get; set; }
+    internal Exception? TerminalException { get; set; }
+    internal bool IsDone => State is 2 or 3;
+    internal bool IsCancelled => State == 3;
+    /// <summary>Atomic state transition (used by cancel: pending/running -> cancelled).</summary>
+    internal bool TryTransition(int from, int to) => Interlocked.CompareExchange(ref _state, to, from) == from;
+}
+
+/// <summary>
+/// Real thread pool behind java.util.concurrent.ExecutorService: N real background
+/// worker threads pulling FuturePeer tasks off a shared BlockingCollection and
+/// executing guest Runnable/Callable bodies under the session GIL. Workers release
+/// the GIL while waiting for work (same discipline as Thread.join). Fixed pools
+/// keep a constant worker count; cached pools grow up to a bounded max and idle
+/// workers exit after a keepalive timeout (never truly unbounded — fail-closed).
+/// </summary>
+internal sealed class ExecutorServicePeer
+{
+    internal const int CachedPoolMaxWorkers = 32;
+    internal const int CachedPoolKeepaliveMs = 60_000;
+
+    internal required int MaxWorkers { get; init; }
+    internal DexObject? ThreadFactory { get; init; }
+    internal required int IdleKeepaliveMs { get; init; }
+    internal BlockingCollection<FuturePeer> Tasks { get; } = new();
+    internal object WorkerGate { get; } = new();
+    /// <summary>Worker threads currently alive (spawned, not yet exited).</summary>
+    internal int ActiveWorkers;
+    /// <summary>Futures whose guest body is currently executing (for shutdownNow interrupts).</summary>
+    internal HashSet<FuturePeer> Running { get; } = new();
+    internal ManualResetEventSlim Terminated { get; } = new(false);
+    internal Exception? TerminalException { get; set; }
+    private int _shutdown;
+    internal bool IsShutdown => Volatile.Read(ref _shutdown) != 0;
+    internal void RequestShutdown() => Volatile.Write(ref _shutdown, 1);
+    internal void DisposeWorkers()
+    {
+        RequestShutdown();
+        try { Tasks.CompleteAdding(); } catch (InvalidOperationException) { }
+    }
+}
+
+/// <summary>
+/// A guest android.os.Looper. The MAIN looper dispatches onto the hosted execution
+/// lane's existing queue when one exists (the lane IS already a message loop — no
+/// second pump); without a lane it owns a private AndroidMessageQueue drained by a
+/// background pump thread. A BACKGROUND looper (Looper.prepare()+loop()) owns a
+/// private queue drained by the calling thread itself via RunPump.
+/// </summary>
+internal sealed class LooperPeer
+{
+    internal required bool IsMain { get; init; }
+    internal AndroidMessageQueue? Queue { get; init; }
+    internal Thread? PumpThread { get; set; }
+    /// <summary>The guest Thread object bound to this Looper (main guest thread for
+    /// the main Looper; the calling thread's guest Thread for prepare()).</summary>
+    internal DexObject? ThreadObject { get; set; }
+    private int _quitRequested;
+    internal bool QuitRequested => Volatile.Read(ref _quitRequested) != 0;
+    internal Exception? TerminalException { get; set; }
+    internal void Quit() => Volatile.Write(ref _quitRequested, 1);
+}
+
+/// <summary>
+/// A guest android.os.Handler: binds to a LooperPeer and tracks pending guest
+/// Runnables so post/removeCallbacks/hasCallbacks honor real semantics. A wrapper
+/// Action checks the pending set under a lock when it runs: if removeCallbacks
+/// removed the runnable first, the wrapper skips execution. Delayed posts use a
+/// cancellable Task.Delay timer.
+/// </summary>
+internal sealed class HandlerPeer
+{
+    internal required LooperPeer Looper { get; init; }
+    internal object Gate { get; } = new();
+    internal HashSet<DexObject> Pending { get; } = new(ReferenceEqualityComparer.Instance);
+    internal Dictionary<DexObject, CancellationTokenSource> Timers { get; } = new(ReferenceEqualityComparer.Instance);
+    internal Exception? LastException { get; set; }
+}
+
 /// <summary>
 /// Mutable referent state for a guest WeakReference. The referent is held
 /// STRONGLY: this runtime has no guest GC model (nothing is ever collected
@@ -526,7 +741,11 @@ internal static class AndroidFrameworkHierarchy
         ["Ljava/lang/ArrayIndexOutOfBoundsException;"] = "Ljava/lang/IndexOutOfBoundsException;",
         ["Ljava/lang/NegativeArraySizeException;"] = "Ljava/lang/RuntimeException;",
         ["Ljava/util/NoSuchElementException;"] = "Ljava/lang/RuntimeException;",
-        ["Ljava/lang/InterruptedException;"] = "Ljava/lang/Exception;"
+        ["Ljava/lang/InterruptedException;"] = "Ljava/lang/Exception;",
+        ["Ljava/util/concurrent/RejectedExecutionException;"] = "Ljava/lang/RuntimeException;",
+        ["Ljava/util/concurrent/CancellationException;"] = "Ljava/lang/IllegalStateException;",
+        ["Ljava/util/concurrent/TimeoutException;"] = "Ljava/lang/Exception;",
+        ["Ljava/util/concurrent/ExecutionException;"] = "Ljava/lang/Exception;"
     };
 
     internal static string? ParentOf(string descriptor) => Parents.TryGetValue(descriptor, out var parent) ? parent : null;
@@ -544,7 +763,10 @@ internal static class AndroidFrameworkHierarchy
         ["Ljava/util/WeakHashMap;"] = ["Ljava/util/Map;"],
         ["Ljava/util/Set;"] = ["Ljava/util/Collection;"],
         ["Ljava/util/List;"] = ["Ljava/util/Collection;"],
-        ["Ljava/util/Collection;"] = ["Ljava/lang/Iterable;"]
+        ["Ljava/util/Collection;"] = ["Ljava/lang/Iterable;"],
+        ["Ljava/util/concurrent/ThreadPoolExecutor;"] = ["Ljava/util/concurrent/ExecutorService;"],
+        ["Ljava/util/concurrent/ExecutorService;"] = ["Ljava/util/concurrent/Executor;"],
+        ["Ljava/util/concurrent/FutureTask;"] = ["Ljava/util/concurrent/Future;", "Ljava/lang/Runnable;"]
     };
 
     internal static IEnumerable<string> InterfacesOf(string descriptor) =>

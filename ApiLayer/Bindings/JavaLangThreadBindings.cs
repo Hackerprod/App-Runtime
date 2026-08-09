@@ -25,6 +25,7 @@ internal static class JavaLangThreadBindings
         if (_currentGuestThread is not null) return;
         var thread = new DexObject("Ljava/lang/Thread;");
         state.Threads.Add(thread, new ThreadPeer { Name = "main" });
+        state.MainThreadObject = thread;
         _currentGuestThread = thread;
     }
 

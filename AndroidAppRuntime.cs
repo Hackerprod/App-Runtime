@@ -121,6 +121,7 @@ public sealed class AndroidAppRuntime
                 var registry = AndroidApiBindings.CreateBuilder(frameworkState, services.LogSink).Build();
                 var interpreter = new DexInterpreter(dexSet, registry, apiSession: apiContext, gil: lane.Gil);
                 frameworkState.Gil = interpreter.Gil;
+                frameworkState.Lane = lane;
                 frameworkState.AttachInterpreter(interpreter);
                 JavaLangThreadBindings.InitializeMainGuestThread(frameworkState);
                 var activity = interpreter.ConstructInstance(manifest.LauncherActivityDescriptor);

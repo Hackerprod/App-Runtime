@@ -32,6 +32,8 @@ public static class AndroidApiBindings
 		AndroidApiRegistryBuilder builder = new AndroidApiRegistryBuilder();
 		JavaLangBindings.Register(builder, state);
 		JavaLangThreadBindings.Register(builder, state);
+		JavaUtilConcurrentExecutorBindings.Register(builder, state);
+		AndroidOsHandlerBindings.Register(builder, state);
 		RegisterVoid(builder, "Landroid/app/Activity;", "<init>", "()V");
 		RegisterVoid(builder, "Landroid/app/Activity;", "onCreate", "(Landroid/os/Bundle;)V");
 		RegisterVoid(builder, "Landroid/app/Activity;", "onStart", "()V");

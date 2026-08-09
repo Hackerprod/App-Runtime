@@ -69,6 +69,31 @@ namespace AndroidRuntime.Core.Dex
         /// around blocking operations.</summary>
         internal AndroidGil Gil => _gil;
 
+        /// <summary>
+        /// Optional provider for framework static fields (e.g. the TimeUnit
+        /// constants read via sget). Framework classes have no DEX &lt;clinit&gt;
+        /// and no field table, so sget consults this hook after the DEX static
+        /// field table misses. Wired by AndroidFrameworkState.AttachInterpreter.
+        /// </summary>
+        internal Func<string, string, object> FrameworkStaticField { get; set; }
+
+        /// <summary>
+        /// Invokes one bound framework API directly from a binding (used by
+        /// Executors to call a guest ThreadFactory.newThread and start the
+        /// resulting guest Thread through the existing Thread.start machinery, and
+        /// by Looper.prepare to bind the calling guest Thread). Runs under the GIL.
+        /// The invoke kind must match the API's real shape (static methods like
+        /// Thread.currentThread pass AndroidInvokeKind.Static).
+        /// </summary>
+        public object InvokeFrameworkExact(string classDescriptor, string methodName, string methodDescriptor, AndroidInvokeKind invokeKind, params object[] args)
+        {
+            using (_gil.Acquire())
+            {
+                var api = new AndroidApiMethodId(classDescriptor, methodName, methodDescriptor);
+                return _api.Invoke(_apiSession, new AndroidApiCallSite(api.ToString(), -1, api, api, invokeKind), args);
+            }
+        }
+
         /// <summary>Punto de entrada de conveniencia: busca un método por clase+nombre y lo ejecuta.</summary>
         public object InvokeStatic(string classDescriptor, string methodName, params object[] args)
         {
@@ -808,7 +833,8 @@ namespace AndroidRuntime.Core.Dex
                                 var fref = dex.Fields[insns[pc + 1]];
                                 EnsureClassInitialized(fref.ClassDescriptor);
                                 object val;
-                                _staticFields.TryGetValue(FieldKey(fref), out val);
+                                if (!_staticFields.TryGetValue(FieldKey(fref), out val))
+                                    val = FrameworkStaticField != null ? FrameworkStaticField(fref.ClassDescriptor, fref.Name) : null;
                                 regs[hiByte] = val ?? DefaultFieldValue(fref.Type);
                                 pc += 2;
                             }
@@ -818,7 +844,9 @@ namespace AndroidRuntime.Core.Dex
                             {
                                 var fref = dex.Fields[insns[pc + 1]];
                                 EnsureClassInitialized(fref.ClassDescriptor);
-                                ulong bits = _staticFields.TryGetValue(FieldKey(fref), out var val) && val is WideValue wide ? wide.Bits : 0UL;
+                                ulong bits = 0UL;
+                                if (_staticFields.TryGetValue(FieldKey(fref), out var val) && val is WideValue wide) bits = wide.Bits;
+                                else if (FrameworkStaticField != null && FrameworkStaticField(fref.ClassDescriptor, fref.Name) is long frameworkWide) bits = unchecked((ulong)frameworkWide);
                                 SetWide(regs, hiByte, bits);
                                 pc += 2;
                             }
@@ -1407,7 +1435,14 @@ namespace AndroidRuntime.Core.Dex
 
         private bool IsTypeAssignable(string actual, string expected)
         {
+            // Structural interface matching for the single-method functional
+            // interfaces guest classes implement (the framework side has no DEX
+            // class for them, so assignability is proven by the method shape).
             if (expected == "Landroid/view/View$OnClickListener;" && _dexSet.FindMethodExact(actual, "onClick", "(Landroid/view/View;)V") is { IsStatic: false }) return true;
+            if (expected == "Ljava/lang/Runnable;" && _dexSet.FindMethodExact(actual, "run", "()V") is { IsStatic: false }) return true;
+            if (expected == "Ljava/lang/Runnable;" && actual == "LandroidRuntime/WorkerRunnable;") return true; // framework-owned synthetic pool worker
+            if (expected == "Ljava/util/concurrent/Callable;" && _dexSet.FindMethodExact(actual, "call", "()Ljava/lang/Object;") is { IsStatic: false }) return true;
+            if (expected == "Ljava/util/concurrent/ThreadFactory;" && _dexSet.FindMethodExact(actual, "newThread", "(Ljava/lang/Runnable;)Ljava/lang/Thread;") is { IsStatic: false }) return true;
             return AndroidFrameworkHierarchy.IsAssignable(actual, expected, SuperclassOf, InterfacesOf);
         }
 

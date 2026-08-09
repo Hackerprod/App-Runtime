@@ -161,7 +161,11 @@ public sealed class AndroidApiSessionContext
         CancellationToken = cancellationToken;
         IsMainLane = isMainLane;
         TraceSink = traceSink;
-        IsTypeAssignable = isTypeAssignable ?? AndroidFrameworkHierarchy.IsAssignable;
+        // Framework-interface-aware default: standalone contexts (tests) must see the
+        // same framework interface edges (e.g. ThreadPoolExecutor implements
+        // ExecutorService) as the interpreter's merged assignability does. Hosted
+        // sessions override with the interpreter's guest+framework version.
+        IsTypeAssignable = isTypeAssignable ?? ((actual, expected) => AndroidFrameworkHierarchy.IsAssignable(actual, expected, AndroidFrameworkHierarchy.ParentOf, AndroidFrameworkHierarchy.InterfacesOf));
     }
 
     public string SessionId { get; }
@@ -366,10 +370,12 @@ public sealed class AndroidApiRegistry
 
     private static bool? KnownStaticShape(AndroidApiMethodId api)
     {
-        if (api.ClassDescriptor is "Landroid/util/Log;" or "Landroid/text/TextUtils;" or "Landroid/graphics/Color;" or "Landroid/os/SystemClock;") return true;
+        if (api.ClassDescriptor is "Landroid/util/Log;" or "Landroid/text/TextUtils;" or "Landroid/graphics/Color;" or "Landroid/os/SystemClock;" or "Ljava/util/concurrent/Executors;") return true;
+        if (api.ClassDescriptor == "Landroid/os/Looper;" && api.MethodName is "getMainLooper" or "myLooper" or "prepare" or "loop") return true;
         if (api.ClassDescriptor == "Ljava/lang/String;" && api.MethodName == "valueOf") return true;
         if (api.ClassDescriptor == "Landroid/widget/Toast;" && api.MethodName == "makeText") return true;
-        if (api.ClassDescriptor is "Landroid/app/Activity;" or "Landroid/content/Context;" or "Landroid/os/BaseBundle;" or "Landroid/os/Bundle;" or "Landroid/content/Intent;" or "Landroid/widget/Toast;" or "Ljava/lang/String;" or "Ljava/lang/StringBuilder;" or "Ljava/lang/CharSequence;") return false;
+        if (api.ClassDescriptor == "Ljava/util/concurrent/TimeUnit;" && api.MethodName == "values") return true;
+        if (api.ClassDescriptor is "Landroid/app/Activity;" or "Landroid/content/Context;" or "Landroid/os/BaseBundle;" or "Landroid/os/Bundle;" or "Landroid/content/Intent;" or "Landroid/widget/Toast;" or "Ljava/lang/String;" or "Ljava/lang/StringBuilder;" or "Ljava/lang/CharSequence;" or "Ljava/util/concurrent/TimeUnit;" or "Ljava/util/concurrent/ThreadPoolExecutor;" or "Ljava/util/concurrent/ExecutorService;" or "Ljava/util/concurrent/Executor;" or "Ljava/util/concurrent/FutureTask;" or "Ljava/util/concurrent/Future;" or "Ljava/util/concurrent/ThreadFactory;" or "Landroid/os/Handler;" or "Landroid/os/Looper;") return false;
         return null;
     }
 
