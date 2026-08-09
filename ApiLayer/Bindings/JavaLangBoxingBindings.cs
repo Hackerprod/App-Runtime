@@ -56,6 +56,26 @@ internal static class JavaLangBoxingBindings
         builder.Register(Api(I, "compare", "(II)I"), (_, args) => RequireInt(args[0]).CompareTo(RequireInt(args[1])));
         builder.Register(Api(I, "compareTo", "(Ljava/lang/Integer;)I"), (_, args) => IntRaw(state, args[0]).CompareTo(IntRaw(state, args[1])));
         builder.Register(Api(I, "equals", "(Ljava/lang/Object;)Z"), (_, args) => args[1] is DexObject other && other.TypeDescriptor == I && IntRaw(state, args[0]) == IntRaw(state, other) ? 1 : 0);
+        // ---- Integer bit-manipulation statics (README boundary #44 deferred surface) ----
+        // Real contract VERIFIED against the Java SE 17 Integer docs:
+        // highestOneBit/lowestOneBit return a VALUE with at most a single one-bit
+        // in the position of the highest/lowest set bit (0 when none) — NOT a bit
+        // index (the common mix-up with numberOfLeadingZeros/TrailingZeros, which
+        // DO return counts); numberOfLeadingZeros/TrailingZeros return 32 for zero;
+        // rotateLeft/Right wrap bits around (bits shifted off one end reappear at
+        // the other), NOT a plain shift; bitCount = population count; signum =
+        // -1/0/1. The CLR bit intrinsics (LeadingZeroCount/TrailingZeroCount/
+        // PopCount/RotateLeft/RotateRight) match Java's semantics exactly.
+        builder.Register(Api(I, "highestOneBit", "(I)I"), (_, args) => HighestOneBit(RequireInt(args[0])));
+        builder.Register(Api(I, "lowestOneBit", "(I)I"), (_, args) => LowestOneBit(RequireInt(args[0])));
+        builder.Register(Api(I, "numberOfLeadingZeros", "(I)I"), (_, args) => int.LeadingZeroCount(RequireInt(args[0])));
+        builder.Register(Api(I, "numberOfTrailingZeros", "(I)I"), (_, args) => int.TrailingZeroCount(RequireInt(args[0])));
+        builder.Register(Api(I, "bitCount", "(I)I"), (_, args) => int.PopCount(RequireInt(args[0])));
+        builder.Register(Api(I, "rotateLeft", "(II)I"), (_, args) => int.RotateLeft(RequireInt(args[0]), RequireInt(args[1]) & 31));
+        builder.Register(Api(I, "rotateRight", "(II)I"), (_, args) => int.RotateRight(RequireInt(args[0]), RequireInt(args[1]) & 31));
+        builder.Register(Api(I, "signum", "(I)I"), (_, args) => Math.Sign(RequireInt(args[0])));
+        builder.Register(Api(I, "toBinaryString", "(I)Ljava/lang/String;"), (_, args) => IntegralToString(RequireInt(args[0]), 2));
+        builder.Register(Api(I, "toHexString", "(I)Ljava/lang/String;"), (_, args) => IntegralToString(RequireInt(args[0]), 16));
 
         // ---- Long ----
         RegisterWide(builder, state, J, "longValue", "()J");
@@ -69,6 +89,19 @@ internal static class JavaLangBoxingBindings
         builder.Register(Api(J, "compare", "(JJ)I"), (_, args) => RequireLong(args[0]).CompareTo(RequireLong(args[1])));
         builder.Register(Api(J, "compareTo", "(Ljava/lang/Long;)I"), (_, args) => LongRaw(state, args[0]).CompareTo(LongRaw(state, args[1])));
         builder.Register(Api(J, "equals", "(Ljava/lang/Object;)Z"), (_, args) => args[1] is DexObject other && other.TypeDescriptor == J && LongRaw(state, args[0]) == LongRaw(state, other) ? 1 : 0);
+        // ---- Long bit-manipulation statics (README boundary #44 deferred surface) ----
+        // Same real contracts as Integer with 64-bit width: highestOneBit/
+        // lowestOneBit return a single-one-bit VALUE (0 when none); the zero-count
+        // methods return 64 for zero; rotate wraps; bitCount = population count.
+        builder.Register(Api(J, "highestOneBit", "(J)J"), (_, args) => HighestOneBitLong(RequireLong(args[0])));
+        builder.Register(Api(J, "lowestOneBit", "(J)J"), (_, args) => LowestOneBitLong(RequireLong(args[0])));
+        builder.Register(Api(J, "numberOfLeadingZeros", "(J)I"), (_, args) => (int)long.LeadingZeroCount(RequireLong(args[0])));
+        builder.Register(Api(J, "numberOfTrailingZeros", "(J)I"), (_, args) => (int)long.TrailingZeroCount(RequireLong(args[0])));
+        builder.Register(Api(J, "bitCount", "(J)I"), (_, args) => (int)long.PopCount(RequireLong(args[0])));
+        builder.Register(Api(J, "rotateLeft", "(JI)J"), (_, args) => long.RotateLeft(RequireLong(args[0]), RequireInt(args[1]) & 63));
+        builder.Register(Api(J, "rotateRight", "(JI)J"), (_, args) => long.RotateRight(RequireLong(args[0]), RequireInt(args[1]) & 63));
+        builder.Register(Api(J, "toBinaryString", "(J)Ljava/lang/String;"), (_, args) => LongToString(RequireLong(args[0]), 2));
+        builder.Register(Api(J, "toHexString", "(J)Ljava/lang/String;"), (_, args) => LongToString(RequireLong(args[0]), 16));
 
         // ---- Short ----
         RegisterIntegral(builder, state, S, "shortValue", "()S");
@@ -225,6 +258,14 @@ internal static class JavaLangBoxingBindings
 
     private static GuestExceptionCarrier NumberFormat() =>
         new(GuestThrowableMetadata.Create("Ljava/lang/NumberFormatException;", "For input string"));
+
+    // highestOneBit: an int value with at most a single one-bit in the position
+    // of the highest-order set bit; 0 if the input has no set bits. Verified
+    // against the Java 17 docs (a VALUE, not an index).
+    private static int HighestOneBit(int value) => value == 0 ? 0 : 1 << (31 - int.LeadingZeroCount(value));
+    private static int LowestOneBit(int value) => value & -value;
+    private static long HighestOneBitLong(long value) => value == 0 ? 0 : 1L << (63 - (int)long.LeadingZeroCount(value));
+    private static long LowestOneBitLong(long value) => value & -value;
 
     private static string IntegralToString(int value, int radix) => radix switch
     {
