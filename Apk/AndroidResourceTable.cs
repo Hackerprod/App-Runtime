@@ -5,6 +5,28 @@ using System.Collections.ObjectModel;
 namespace AndroidRuntime.Core.Apk;
 
 public enum AndroidResourceValueKind { Null, Reference, Attribute, String, Float, Dimension, Fraction, Integer, Boolean, Color }
+
+/// <summary>A parsed ResTable_map_entry (style/theme bag): the attribute map
+/// entries in source order plus the optional parent style id. Styles are kept
+/// separate from simple entries because they are attribute bags, not single
+/// values; a view's `style` attribute resolves through ResolveStyleChain.</summary>
+public sealed class AndroidResourceStyle
+{
+    internal AndroidResourceStyle(uint id, uint parent, IReadOnlyList<AndroidResourceStyleAttribute> attributes, ushort density, int sourceOrder, string name)
+    { Id = id; Parent = parent; Attributes = attributes; Density = density; SourceOrder = sourceOrder; Name = name; }
+    public uint Id { get; }
+    public uint Parent { get; }
+    public IReadOnlyList<AndroidResourceStyleAttribute> Attributes { get; }
+    public ushort Density { get; }
+    internal int SourceOrder { get; }
+    /// <summary>The style's key-pool name (e.g. "Widget.AppCompat.Button.Colored"),
+    /// used by bounded fallbacks that distinguish framework style families.</summary>
+    public string Name { get; }
+    internal static AndroidResourceStyle ForTest(uint id, uint parent, IEnumerable<AndroidResourceStyleAttribute> attributes, string name = "", ushort density = 0, int sourceOrder = 0) =>
+        new(id, parent, new ReadOnlyCollection<AndroidResourceStyleAttribute>(attributes.ToArray()), density, sourceOrder, name);
+}
+
+public readonly record struct AndroidResourceStyleAttribute(uint AttributeId, AndroidResourceValue Value);
 public enum AndroidDimensionUnit { Px = 0, Dp = 1, Sp = 2, Pt = 3, In = 4, Mm = 5 }
 public enum AndroidFractionUnit { Fraction = 0, FractionParent = 1 }
 public readonly record struct AndroidDimension(float Value, AndroidDimensionUnit Unit);
@@ -106,8 +128,12 @@ public sealed class AndroidResourceLimits
 public sealed class AndroidResourceTable
 {
     private const string Prefix = "ARSC_INVALID";
-    private AndroidResourceTable(IReadOnlyDictionary<uint, AndroidResourceEntry> entries) { Entries = entries; }
+    private AndroidResourceTable(IReadOnlyDictionary<uint, AndroidResourceEntry> entries, IReadOnlyDictionary<uint, AndroidResourceStyle> styles) { Entries = entries; Styles = styles; }
     public IReadOnlyDictionary<uint, AndroidResourceEntry> Entries { get; }
+    /// <summary>Parsed style/theme bags keyed by their resource id. Only
+    /// well-formed complex entries are kept; a complex entry that cannot be
+    /// validated stays absent and lookup fails cleanly (ARSC_NOT_FOUND).</summary>
+    public IReadOnlyDictionary<uint, AndroidResourceStyle> Styles { get; }
 
     public static AndroidResourceTable Parse(byte[] data, AndroidResourceLimits? limits = null) { ArgumentNullException.ThrowIfNull(data); return Parse((ReadOnlySpan<byte>)data, limits); }
     public static AndroidResourceTable Parse(ReadOnlySpan<byte> data, AndroidResourceLimits? limits = null)
@@ -128,6 +154,7 @@ public sealed class AndroidResourceTable
         int packageCount = 0;
         int totalEntryCount = 0;
         var candidates = new Dictionary<uint, List<AndroidResourceEntry>>();
+        var styleCandidates = new Dictionary<uint, List<AndroidResourceStyle>>();
         for (int offset = root.HeaderSize; offset < root.End;)
         {
             AndroidChunk child = Chunk(data, offset, root.End);
@@ -139,7 +166,7 @@ public sealed class AndroidResourceTable
             else if (child.Type == 0x0200)
             {
                 if (!sawGlobals) throw Invalid("package appeared before global string pool");
-                ParsePackage(data, child, globals, candidates, limits, ref totalEntryCount); packageCount++;
+                ParsePackage(data, child, globals, candidates, styleCandidates, limits, ref totalEntryCount); packageCount++;
             }
             else throw Invalid($"unsupported table child chunk 0x{child.Type:x4}");
             offset = child.End;
@@ -147,10 +174,12 @@ public sealed class AndroidResourceTable
         if (!sawGlobals || packageCount != declaredPackages) throw Invalid("declared package count does not match parsed packages");
         var selected = new Dictionary<uint, AndroidResourceEntry>();
         foreach (var pair in candidates) selected.Add(pair.Key, SelectConfiguration(pair.Value, limits.TargetDensity));
-        return new AndroidResourceTable(new ReadOnlyDictionary<uint, AndroidResourceEntry>(selected));
+        var selectedStyles = new Dictionary<uint, AndroidResourceStyle>();
+        foreach (var pair in styleCandidates) selectedStyles.Add(pair.Key, SelectStyleConfiguration(pair.Value, limits.TargetDensity));
+        return new AndroidResourceTable(new ReadOnlyDictionary<uint, AndroidResourceEntry>(selected), new ReadOnlyDictionary<uint, AndroidResourceStyle>(selectedStyles));
     }
 
-    private static void ParsePackage(ReadOnlySpan<byte> data, AndroidChunk package, string[] globals, Dictionary<uint, List<AndroidResourceEntry>> output, AndroidResourceLimits limits, ref int totalEntryCount)
+    private static void ParsePackage(ReadOnlySpan<byte> data, AndroidChunk package, string[] globals, Dictionary<uint, List<AndroidResourceEntry>> output, Dictionary<uint, List<AndroidResourceStyle>> styles, AndroidResourceLimits limits, ref int totalEntryCount)
     {
         if (package.HeaderSize < 284) throw Invalid("package header is smaller than 284 bytes");
         uint packageId = U32(data, package.Offset + 8); if (packageId is 0 or > 255) throw Invalid("package id is outside 1..255");
@@ -183,10 +212,10 @@ public sealed class AndroidResourceTable
         }
         if (types is null || keys is null) throw Invalid("package string pools are missing");
         foreach (AndroidChunk typeChunk in typeChunks)
-            ParseType(data, typeChunk, packageId, packageName, types, keys, globals, typeSpecs, output, limits, ref totalEntryCount);
+            ParseType(data, typeChunk, packageId, packageName, types, keys, globals, typeSpecs, output, styles, limits, ref totalEntryCount);
     }
 
-    private static void ParseType(ReadOnlySpan<byte> data, AndroidChunk chunk, uint packageId, string packageName, string[] types, string[] keys, string[] globals, IReadOnlyDictionary<byte, uint> typeSpecs, Dictionary<uint, List<AndroidResourceEntry>> output, AndroidResourceLimits limits, ref int totalEntryCount)
+    private static void ParseType(ReadOnlySpan<byte> data, AndroidChunk chunk, uint packageId, string packageName, string[] types, string[] keys, string[] globals, IReadOnlyDictionary<byte, uint> typeSpecs, Dictionary<uint, List<AndroidResourceEntry>> output, Dictionary<uint, List<AndroidResourceStyle>> styles, AndroidResourceLimits limits, ref int totalEntryCount)
     {
         if (chunk.HeaderSize < 24) throw Invalid("type header is malformed");
         byte typeId = data[chunk.Offset + 8], flags = data[chunk.Offset + 9];
@@ -215,20 +244,50 @@ public sealed class AndroidResourceTable
             // even when the entry is skipped below; otherwise an all-complex table
             // could bypass the work bound while the loop still walks every entry.
             if (++totalEntryCount > limits.MaxEntries) throw Invalid($"resource entries exceed quota {limits.MaxEntries}");
-            // Complex entries (ResTable_map_entry: styles/themes/bags) are not
-            // supported by this bounded reader. Skip that one index rather than
-            // aborting the whole table: the specific id is simply absent, and
-            // AndroidResourceResolver lookup fails cleanly (ARSC_NOT_FOUND) only
-            // if something asks for it. This check runs before any other validation
-            // so complex-shaped data is never misread with the simple-entry decoder.
-            if ((entryFlags & 1) != 0) continue;
+            uint id = (packageId << 24) | ((uint)typeId << 16) | (uint)index;
+            // Complex entries (ResTable_map_entry: styles/themes/bags) are parsed
+            // into the style collection so a view's `style` attribute can resolve
+            // its attribute map (background/textColor etc.). A malformed complex
+            // entry is skipped for that one index rather than aborting the whole
+            // table; its id is simply absent, and lookup fails cleanly
+            // (ARSC_NOT_FOUND) only if something asks for it.
+            if ((entryFlags & 1) != 0)
+            {
+                ParseStyleEntry(data, entryAt, entrySize, keyIndex, id, keys, globals, styles, limits, ref totalEntryCount, chunk.End, density);
+                continue;
+            }
             if (entrySize < 8 || keyIndex >= keys.Length) throw Invalid("resource entry header or key index is invalid");
             int valueAt = checked(entryAt + entrySize); if (valueAt > chunk.End - 8 || U16(data, valueAt) != 8 || data[valueAt + 2] != 0) throw Invalid("resource value is truncated or malformed");
             AndroidResourceValue value = AndroidResourceValue.FromBinary(data[valueAt + 3], U32(data, valueAt + 4), globals, Prefix);
-            uint id = (packageId << 24) | ((uint)typeId << 16) | (uint)index;
             if (!output.TryGetValue(id, out var list)) output.Add(id, list = []);
             list.Add(new AndroidResourceEntry(id, new AndroidResourceName(packageName, types[typeId - 1], keys[keyIndex]), value, density, chunk.Offset));
         }
+    }
+
+    /// <summary>Parses one complex ResTable_map_entry into an AndroidResourceStyle.
+    /// The entry header is 16 bytes (size/flags/key/parent/count); each following
+    /// ResTable_map entry is 12 bytes (attribute name u32 + 8-byte Res_value).
+    /// Fail-closed: an entry whose map crosses the chunk boundary or whose
+    /// per-map work would exceed the quota is skipped for that one index.</summary>
+    private static void ParseStyleEntry(ReadOnlySpan<byte> data, int entryAt, ushort entrySize, uint keyIndex, uint id, string[] keys, string[] globals, Dictionary<uint, List<AndroidResourceStyle>> styles, AndroidResourceLimits limits, ref int totalEntryCount, int chunkEnd, ushort density)
+    {
+        if (entrySize < 16 || keyIndex >= keys.Length || entryAt > chunkEnd - 16) return;
+        uint parent = U32(data, entryAt + 8), count = U32(data, entryAt + 12);
+        if (count > limits.MaxEntries) return;
+        if (count > 0 && (long)entryAt + entrySize + (long)count * 12 > chunkEnd) return;
+        var attributes = new List<AndroidResourceStyleAttribute>((int)count);
+        int mapAt = entryAt + entrySize;
+        for (int mapIndex = 0; mapIndex < count; mapIndex++)
+        {
+            if (++totalEntryCount > limits.MaxEntries) throw Invalid($"resource entries exceed quota {limits.MaxEntries}");
+            uint attributeId = U32(data, mapAt);
+            if (attributeId == 0 || mapAt > chunkEnd - 12 || U16(data, mapAt + 4) != 8 || data[mapAt + 6] != 0) return;
+            AndroidResourceValue value = AndroidResourceValue.FromBinary(data[mapAt + 7], U32(data, mapAt + 8), globals, Prefix);
+            attributes.Add(new AndroidResourceStyleAttribute(attributeId, value));
+            mapAt += 12;
+        }
+        if (!styles.TryGetValue(id, out var list)) styles.Add(id, list = []);
+        list.Add(new AndroidResourceStyle(id, parent, new ReadOnlyCollection<AndroidResourceStyleAttribute>(attributes), density, entryAt, keys[keyIndex]));
     }
 
     private static bool HasUnsupportedQualifier(ReadOnlySpan<byte> config, ushort density)
@@ -243,6 +302,8 @@ public sealed class AndroidResourceTable
     private static (int Exact, int Default, int Distance) DensityRank(ushort density, int target) => density == target ? (0, 0, 0) : density == 0 ? (1, 0, 0) : (1, 1, Math.Abs(density - target));
     internal static AndroidResourceEntry SelectConfiguration(IEnumerable<AndroidResourceEntry> entries, int targetDensity) =>
         entries.OrderBy(entry => DensityRank(entry.Density, targetDensity)).ThenBy(entry => entry.SourceOrder).First();
+    private static AndroidResourceStyle SelectStyleConfiguration(IEnumerable<AndroidResourceStyle> styles, int targetDensity) =>
+        styles.OrderBy(style => DensityRank(style.Density, targetDensity)).ThenBy(style => style.SourceOrder).First();
     private static string ReadPackageName(ReadOnlySpan<byte> data, int offset)
     {
         int length = 0; while (length < 128 && U16(data, offset + length * 2) != 0) length++;

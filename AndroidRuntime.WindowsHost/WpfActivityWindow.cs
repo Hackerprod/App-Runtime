@@ -56,8 +56,10 @@ public sealed class WpfActivityWindowFactory : IActivityWindowFactory, IDisposab
             var root = new Grid();
             var window = new Window
             {
-                Width = 800,
-                Height = 600,
+                // Phone-shaped portrait window matching the reference device's
+                // 1080x2196 display (aspect 0.4918 = 360x732 DIP at 3x density).
+                Width = 360,
+                Height = 732,
                 Title = packageName,
                 WindowStartupLocation = WindowStartupLocation.CenterScreen,
                 Content = root

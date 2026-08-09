@@ -35,6 +35,38 @@ public sealed class AndroidSceneHostTests
     }
 
     [Fact]
+    public void Vertical_layout_with_center_gravity_centers_children_horizontally()
+    {
+        var root = new AndroidLinearLayoutNode(1) { Orientation = AndroidOrientation.Vertical, Gravity = 0x11 };
+        var child = new AndroidTextViewNode(2) { Text = "Centered", LayoutWidth = AndroidLayoutDimension.Exact(50) };
+        root.Add(child);
+        var renderer = new RecordingAndroidRenderBackend();
+        using var host = new AndroidSceneHost(root, new DeterministicAndroidTextMeasurer(), renderer, new AndroidUiLimits());
+        host.SetViewport(200, 200, 1f); host.Render();
+
+        // 200 wide container, 50 wide child: centered horizontally at (200-50)/2.
+        Assert.Equal(75f, child.Bounds.X);
+        Assert.Equal(0f, child.Bounds.Y);
+        Assert.Equal(50f, child.Bounds.Width);
+    }
+
+    [Fact]
+    public void Center_gravity_text_offsets_draw_rect_inside_large_button_bounds()
+    {
+        var button = new AndroidButtonNode(1) { Text = "Connect", LayoutWidth = AndroidLayoutDimension.Exact(200), LayoutHeight = AndroidLayoutDimension.Exact(60) };
+        var renderer = new RecordingAndroidRenderBackend();
+        using var host = new AndroidSceneHost(button, new DeterministicAndroidTextMeasurer(), renderer, new AndroidUiLimits());
+        host.SetViewport(200, 200, 1f); host.Render();
+
+        AndroidDrawTextCommand text = Assert.Single(host.Render().DisplayList.Commands.OfType<AndroidDrawTextCommand>());
+        // Button default gravity is CENTER (0x11): the text draw rect must start
+        // inset from the button bounds (not at 0,0).
+        Assert.True(text.Rect.X > 0, $"expected centered x > 0, got {text.Rect.X}");
+        Assert.True(text.Rect.Y > 0, $"expected centered y > 0, got {text.Rect.Y}");
+        Assert.True(text.Rect.X < 100, $"expected left half x, got {text.Rect.X}");
+    }
+
+    [Fact]
     public void View_depth_and_count_quotas_fail_closed()
     {
         var root = new AndroidLinearLayoutNode(1); root.Add(new AndroidTextViewNode(2));

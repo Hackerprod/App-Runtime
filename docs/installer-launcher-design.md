@@ -79,14 +79,22 @@ that exact resolution consistently to guest code everywhere it's queryable
 `View.getWidth()`/`getHeight()` for the root/decor view). One source of
 truth for all of these, not independently hardcoded per binding.
 
+**Partially implemented (visual-fidelity unit)**: `WpfActivityWindowFactory`
+now opens the default window phone-shaped at **360x732 DIP** — the exact
+dp size of the verified reference device (1080x2196 at 3x density, aspect
+0.4918) — instead of the previous arbitrary 800x600 landscape debug
+window. The captured frame confirms portrait shape and horizontal
+centering (`android:gravity="center"` on the root layout).
+
 **Existing baseline to reconcile**: `AndroidApiBindings.cs`'s
-`RegisterConfiguration` already hardcodes `screenWidthDp=360`,
+`RegisterConfiguration` still hardcodes `screenWidthDp=360`,
 `screenHeightDp=640`, `smallestScreenWidthDp=360`, `densityDpi=320`
-(xhdpi) — that's a fixed **720x1280px** physical baseline. When this
-feature is built, either update those constants to match the chosen real
-default or make them derive from the same single display-state source
-this feature introduces — don't leave two independently-hardcoded
-"default resolution" facts in the codebase.
+(xhdpi) — that's a fixed **720x1280px** physical baseline, which does NOT
+match the 360x732dp window shape above. When the full Display feature is
+built, either update those constants to match the chosen real default
+(360x732dp at 3x for the reference device) or make them derive from the
+same single display-state source this feature introduces — don't leave
+two independently-hardcoded "default resolution" facts in the codebase.
 
 **Default resolution — needs real verification before locking in**: don't
 pick a number from memory/guess. Check current Android device
@@ -98,7 +106,9 @@ starting candidate to verify against real data: **1080x1920 (FHD, 16:9,
 xxhdpi/480dpi)** — a long-standing common baseline many apps already
 render correctly against — but confirm rather than assume, and note
 today's typical flagship default may already have shifted toward taller
-aspect ratios (~19.5:9-20:9, e.g. 1080x2400).
+aspect ratios (~19.5:9-20:9, e.g. 1080x2400). The 360x732 window shape
+above already matches the taller modern trend; the config constants are
+the remaining reconciliation.
 
 **Settings-configurable** (reuse the already-built `SharedPreferences`
 binding's in-memory store, or a small dedicated host-settings store, for

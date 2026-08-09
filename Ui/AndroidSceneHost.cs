@@ -55,6 +55,11 @@ public abstract class AndroidViewNode
     public string? GuestDescriptor { get; set; }
     public string? ContentDescription { get; set; }
     public string? XmlOnClick { get; set; }
+    /// <summary>android:gravity bits (android.view.Gravity constants). The bounded
+    /// subset honors CENTER_HORIZONTAL (0x01) and CENTER_VERTICAL (0x10): layout
+    /// containers center children on the cross axis and text nodes center their
+    /// text within their bounds.</summary>
+    public int Gravity { get; set; }
     public AndroidLayoutDimension LayoutWidth { get; set; } = AndroidLayoutDimension.MatchParent;
     public AndroidLayoutDimension LayoutHeight { get; set; } = AndroidLayoutDimension.WrapContent;
     public AndroidRect Bounds { get; internal set; }
@@ -97,7 +102,19 @@ public sealed class AndroidLinearLayoutNode : AndroidViewNode
     internal override void Layout(float x, float y, float width, float height, AndroidUiContext context)
     {
         base.Layout(x, y, width, height, context); float padding = PaddingDp * context.Density, left = x + padding, top = y + padding;
-        foreach (AndroidViewNode child in Children) { if (child.Visibility == AndroidViewVisibility.Gone) continue; child.Layout(left, top, child.MeasuredSize.Width, child.MeasuredSize.Height, context); if (Orientation == AndroidOrientation.Vertical) top += child.MeasuredSize.Height; else left += child.MeasuredSize.Width; }
+        float contentWidth = Math.Max(0, width - padding * 2), contentHeight = Math.Max(0, height - padding * 2);
+        bool centerHorizontal = (Gravity & 0x01) != 0, centerVertical = (Gravity & 0x10) != 0;
+        foreach (AndroidViewNode child in Children)
+        {
+            if (child.Visibility == AndroidViewVisibility.Gone) continue;
+            float childX = left, childY = top;
+            if (Orientation == AndroidOrientation.Vertical && centerHorizontal)
+                childX = left + Math.Max(0, (contentWidth - child.MeasuredSize.Width) / 2);
+            else if (Orientation == AndroidOrientation.Horizontal && centerVertical)
+                childY = top + Math.Max(0, (contentHeight - child.MeasuredSize.Height) / 2);
+            child.Layout(childX, childY, child.MeasuredSize.Width, child.MeasuredSize.Height, context);
+            if (Orientation == AndroidOrientation.Vertical) top += child.MeasuredSize.Height; else left += child.MeasuredSize.Width;
+        }
     }
     private static AndroidMeasureSpec ChildSpec(AndroidLayoutDimension dimension, float available, float density) => dimension.Kind switch { AndroidLayoutSize.MatchParent => AndroidMeasureSpec.Exactly(available), AndroidLayoutSize.Exact => AndroidMeasureSpec.Exactly(dimension.Value * density), _ => AndroidMeasureSpec.AtMost(available) };
     private static float ResolveSize(AndroidLayoutDimension dimension, float desired, AndroidMeasureSpec spec, float density) => dimension.Kind switch { AndroidLayoutSize.MatchParent => spec.Size, AndroidLayoutSize.Exact => Math.Min(spec.Size, dimension.Value * density), _ => spec.Mode == AndroidMeasureMode.Exactly ? spec.Size : Math.Min(spec.Size, desired) };
@@ -117,11 +134,22 @@ public class AndroidTextViewNode : AndroidViewNode
         float desiredWidth = metrics.Width, desiredHeight = metrics.Height;
         return MeasuredSize = new(LayoutWidth.Kind == AndroidLayoutSize.MatchParent || width.Mode == AndroidMeasureMode.Exactly ? width.Size : Math.Min(width.Size, desiredWidth), LayoutHeight.Kind == AndroidLayoutSize.Exact ? height.Size : Math.Min(height.Size, desiredHeight));
     }
-    internal override void Record(List<AndroidDrawCommand> commands, AndroidUiContext context) { if (Visibility != AndroidViewVisibility.Visible) return; base.Record(commands, context); commands.Add(new AndroidDrawTextCommand(Bounds, Text, TextSizeSp * context.ScaledDensity, TextColor, ResourceId)); }
+    internal override void Record(List<AndroidDrawCommand> commands, AndroidUiContext context)
+    {
+        if (Visibility != AndroidViewVisibility.Visible) return;
+        base.Record(commands, context);
+        AndroidTextMetrics metrics = context.TextMeasurer.Measure(Text, TextSizeSp * context.ScaledDensity, Bounds.Width);
+        float x = Bounds.X, y = Bounds.Y, width = Bounds.Width, height = Bounds.Height;
+        if ((Gravity & 0x01) != 0 && Bounds.Width > metrics.Width)
+            x += Math.Max(0, (Bounds.Width - metrics.Width) / 2);
+        if ((Gravity & 0x10) != 0 && Bounds.Height > metrics.Height)
+            y += Math.Max(0, (Bounds.Height - metrics.Height) / 2);
+        commands.Add(new AndroidDrawTextCommand(new AndroidRect(x, y, Bounds.Width - (x - Bounds.X), Bounds.Height - (y - Bounds.Y)), Text, TextSizeSp * context.ScaledDensity, TextColor, ResourceId));
+    }
 }
 public sealed class AndroidButtonNode : AndroidTextViewNode
 {
-    public AndroidButtonNode(int resourceId) : base(resourceId) { Focusable = true; BackgroundColor = new(255, 224, 224, 224); }
+    public AndroidButtonNode(int resourceId) : base(resourceId) { Focusable = true; Gravity = 0x11; BackgroundColor = new(255, 224, 224, 224); }
     internal override AndroidSize Measure(AndroidMeasureSpec width, AndroidMeasureSpec height, AndroidUiContext context) { AndroidSize text = base.Measure(width, height, context); return MeasuredSize = new(text.Width, Math.Min(height.Size, text.Height + 24 * context.Density)); }
 }
 

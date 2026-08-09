@@ -7,6 +7,10 @@ namespace AndroidRuntime.Core.Ui;
 public sealed class AndroidLayoutInflater
 {
     private const string AndroidNamespace = "http://schemas.android.com/apk/res/android";
+    /// <summary>Bounded Material accent fallback for style chains that bottom out
+    /// in the framework theme (?attr/colorAccent). The verified reference frame's
+    /// teal is AppCompat's accent default: material_deep_teal_500 (#FF008577).</summary>
+    private const uint MaterialAccentArgb = 0xff008577u;
     private readonly AndroidResourceResolver _resources;
     private readonly AndroidUiLimits _limits;
 
@@ -114,7 +118,13 @@ public sealed class AndroidLayoutInflater
         {
             text.Text = ReadString(element, "text") ?? string.Empty;
             text.TextSizeSp = ReadDimension(element, "textSize", 16, AndroidDimensionUnit.Sp);
-            text.TextColor = ReadColor(element, "textColor", new AndroidColor(255, 32, 32, 32));
+            // Element textColor wins when present; otherwise keep the style-chain
+            // color ApplyCommon may have set (real precedence: explicit element
+            // attribute overrides the style, never the reverse).
+            if (TryValue(element, "textColor", out AndroidResourceValue textColorValue))
+                text.TextColor = textColorValue.Kind == AndroidResourceValueKind.Color
+                    ? Color(textColorValue.AsColor())
+                    : throw new InvalidDataException($"UI_INVALID_ATTRIBUTE: textColor is {textColorValue.Kind}");
         }
         return node;
     }
@@ -125,6 +135,18 @@ public sealed class AndroidLayoutInflater
         node.LayoutHeight = ReadLayoutDimension(element, "layout_height");
         node.ContentDescription = ReadString(element, "contentDescription");
         node.XmlOnClick = ReadString(element, "onClick");
+        // Gravity is a node-level default (AndroidButtonNode centers text, 0x11;
+        // TextView/LinearLayout default to 0). Only override when the element
+        // actually declares android:gravity — ReadInteger's fallback would
+        // otherwise clobber Button's CENTER to 0 for every button without an
+        // explicit gravity attribute.
+        if (TryValue(element, "gravity", out _))
+            node.Gravity = ReadInteger(element, "gravity", 0);
+        // App-owned style attribute: the view's `style` resolves through the app
+        // style chain and its background/textColor attributes apply when the
+        // element itself does not set them (real Android precedence: an explicit
+        // element attribute wins over a style-provided value).
+        ApplyStyle(node, element);
         if (TryValue(element, "background", out AndroidResourceValue background))
         {
             // Colors render; drawable resources (shapes, selectors, bitmaps) are
@@ -134,6 +156,98 @@ public sealed class AndroidLayoutInflater
             node.BackgroundColor = Color(background.AsColor());
         }
     }
+
+    /// <summary>
+    /// Bounded style support: when a view declares an app-owned `style`, the
+    /// style chain (style → parent → …) supplies android:background
+    /// (0x010100d4), android:textColor (0x01010098), and android:textAppearance
+    /// (0x01010034, itself a style whose chain supplies textColor). A value that
+    /// resolves to a concrete color is used directly. A chain that bottoms out in
+    /// the framework Material theme (background/text-color drawables and theme
+    /// attributes that need a theme context) applies the bounded Material accent
+    /// fallback matching the verified reference frame: the Colored button family
+    /// renders accent-teal background with white text; the Borderless.Colored
+    /// family renders accent-teal text over the default background. Framework
+    /// styles (0x01xxxxxx), missing styles, and unresolved non-framework values
+    /// apply nothing. An explicit element attribute always wins.
+    /// </summary>
+    private void ApplyStyle(AndroidViewNode node, AndroidXmlElement element)
+    {
+        // Read the raw style reference directly: TryValue would resolve through
+        // the entries table, but style ids live in the style bag collection.
+        // Real Android's `style` attribute is NOT android-namespaced (binary XML
+        // encodes it with an empty namespace), so match by name only.
+        AndroidXmlAttribute? styleAttribute = element.Attributes.FirstOrDefault(item => item.Name == "style");
+        if (styleAttribute is null || styleAttribute.Value.Kind != AndroidResourceValueKind.Reference) return;
+        uint styleId = styleAttribute.Value.AsReference();
+        if ((styleId >> 24) != 0x7f) return; // framework style: no app table to resolve against
+        bool isText = node is AndroidTextViewNode;
+        bool reachedFramework = false;
+        bool isBorderlessColored = false;
+        AndroidResourceValue? backgroundValue = null, textColorValue = null;
+        uint? textAppearanceStyle = null;
+        WalkChain(styleId);
+        // Text color may come from the textAppearance style's own chain when the
+        // button style does not set android:textColor directly.
+        if (textColorValue is null && textAppearanceStyle is { } appearance)
+            WalkChain(appearance);
+
+        void WalkChain(uint start)
+        {
+            uint current = start;
+            var seen = new HashSet<uint>();
+            for (int depth = 0; depth < 8; depth++)
+            {
+                if (!seen.Add(current)) break;
+                AndroidResourceStyle? style = _resources.TryGetStyle(current);
+                if (style is null) break;
+                if (style.Name.Contains("Borderless.Colored", StringComparison.OrdinalIgnoreCase)) isBorderlessColored = true;
+                foreach (AndroidResourceStyleAttribute attribute in style.Attributes)
+                {
+                    if (attribute.AttributeId == 0x010100d4 && backgroundValue is null)
+                        backgroundValue = attribute.Value;
+                    else if (attribute.AttributeId == 0x01010098 && textColorValue is null)
+                        textColorValue = attribute.Value;
+                    else if (attribute.AttributeId == 0x01010034 && textAppearanceStyle is null && attribute.Value.Kind == AndroidResourceValueKind.Reference)
+                        textAppearanceStyle = attribute.Value.AsReference();
+                }
+                if (style.Parent == 0) break;
+                if ((style.Parent >> 24) == 0x01) { reachedFramework = true; break; }
+                current = style.Parent;
+            }
+        }
+
+        // Background: concrete color wins; an unresolved background on a chain
+        // that reaches the framework Material theme is the Colored button's
+        // accent drawable (?attr/colorAccent) → teal. Borderless.Colored buttons
+        // have no background at all (transparent, matching the framework family).
+        bool backgroundApplied = false;
+        if (isBorderlessColored)
+        {
+            node.BackgroundColor = null;
+        }
+        else if (backgroundValue is { } background)
+        {
+            uint? color = _resources.TryResolveStyleColor(background);
+            if (color is null && reachedFramework) { color = MaterialAccentArgb; backgroundApplied = true; }
+            if (color is { } resolved && !ElementHasAttribute(element, "background"))
+                node.BackgroundColor = Color(resolved);
+        }
+        if (isText && textColorValue is { } textColor)
+        {
+            uint? color = _resources.TryResolveStyleColor(textColor);
+            // Unresolved theme color on a framework Material chain: Colored
+            // buttons use white text over the accent; Borderless.Colored links
+            // use the accent text color itself.
+            if (color is null && reachedFramework)
+                color = backgroundApplied ? 0xffffffffu : MaterialAccentArgb;
+            if (color is { } resolved && !ElementHasAttribute(element, "textColor") && node is AndroidTextViewNode text)
+                text.TextColor = Color(resolved);
+        }
+    }
+
+    private static bool ElementHasAttribute(AndroidXmlElement element, string name) =>
+        element.Attributes.Any(item => item.Name == name && item.NamespaceUri == AndroidNamespace);
 
     private int ReadId(AndroidXmlElement element)
     {
