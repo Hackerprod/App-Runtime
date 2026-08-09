@@ -11,7 +11,7 @@ namespace AndroidRuntime.Core.ApiLayer;
 
 public sealed record AndroidPeerLimits
 {
-    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024)
+    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024, int maxBoxed = 1024)
     {
         StringBuilders = maxStringBuilders;
         Bundles = maxBundles;
@@ -34,6 +34,7 @@ public sealed record AndroidPeerLimits
         Loopers = maxLoopers;
         Handlers = maxHandlers;
         Methods = maxMethods;
+        Boxed = maxBoxed;
         Validate();
     }
 
@@ -59,10 +60,11 @@ public sealed record AndroidPeerLimits
     public int Loopers { get; }
     public int Handlers { get; }
     public int Methods { get; }
+    public int Boxed { get; }
 
     public void Validate()
     {
-        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0)
+        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0 || Boxed <= 0)
             throw new ArgumentOutOfRangeException(nameof(AndroidPeerLimits), "Peer limits must be positive.");
     }
 }
@@ -149,6 +151,7 @@ public sealed class AndroidFrameworkState : IDisposable
         Loopers = new AndroidPeerStore<LooperPeer>("Looper", PeerLimits.Loopers, peer => peer.Quit());
         Handlers = new AndroidPeerStore<HandlerPeer>("Handler", PeerLimits.Handlers);
         Methods = new AndroidPeerStore<MethodPeer>("Method", PeerLimits.Methods);
+        Boxed = new AndroidPeerStore<BoxedPeer>("Boxed", PeerLimits.Boxed);
         ApplicationContext = new DexObject("Landroid/app/Application;");
         LauncherIntent = new DexObject("Landroid/content/Intent;");
         Intents.Add(LauncherIntent, new IntentPeer { Action = "android.intent.action.MAIN" });
@@ -200,6 +203,7 @@ public sealed class AndroidFrameworkState : IDisposable
     internal AndroidPeerStore<LooperPeer> Loopers { get; }
     internal AndroidPeerStore<HandlerPeer> Handlers { get; }
     internal AndroidPeerStore<MethodPeer> Methods { get; }
+    internal AndroidPeerStore<BoxedPeer> Boxed { get; }
     /// <summary>The session's GIL: shared by the interpreter and every binding that
     /// must release it around real blocking (sleep/join/monitor-enter/class-init
     /// wait). AndroidAppRuntime replaces this with the execution lane's GIL.</summary>
@@ -362,7 +366,72 @@ public sealed class AndroidFrameworkState : IDisposable
     {
         if (classDescriptor == "Ljava/util/concurrent/TimeUnit;")
             return TimeUnitByName.TryGetValue(fieldName, out var constant) ? constant : null;
+        // Boxed-primitive static fields: Boolean.TRUE/FALSE singletons and the
+        // per-type TYPE class constants (real Java: Integer.TYPE == int.class, etc.).
+        if (classDescriptor == "Ljava/lang/Boolean;")
+        {
+            if (fieldName == "TRUE") return BoxedObject("Ljava/lang/Boolean;", 1);
+            if (fieldName == "FALSE") return BoxedObject("Ljava/lang/Boolean;", 0);
+        }
+        if (fieldName == "TYPE")
+        {
+            string? primitive = classDescriptor switch
+            {
+                "Ljava/lang/Boolean;" => "Z",
+                "Ljava/lang/Byte;" => "B",
+                "Ljava/lang/Character;" => "C",
+                "Ljava/lang/Short;" => "S",
+                "Ljava/lang/Integer;" => "I",
+                "Ljava/lang/Long;" => "J",
+                "Ljava/lang/Float;" => "F",
+                "Ljava/lang/Double;" => "D",
+                _ => null
+            };
+            if (primitive is not null) return EnsureClassObject(primitive);
+        }
         return null;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Boxed-primitive caches (real JDK documented ranges — see README boundary #44)
+    // ---------------------------------------------------------------------------
+
+    private readonly object _boxedGate = new();
+    private readonly Dictionary<(string Type, long Key), DexObject> _boxedCache = new();
+
+    /// <summary>
+    /// Materializes a boxed primitive with the REAL JDK valueOf caching contract:
+    /// Boolean always returns one of two singletons; Integer/Short/Byte/Long
+    /// cache -128..127; Character caches 0..127 (unsigned asymmetry, per the JDK
+    /// spec); Double/Float NEVER cache. Cached entries are the same object for
+    /// the same (type, value); outside the range a fresh object is created
+    /// (identity then differs, equals is value-based and still works).
+    /// </summary>
+    internal DexObject BoxedObject(string type, object rawValue)
+    {
+        bool cacheable = type switch
+        {
+            "Ljava/lang/Boolean;" => true,
+            "Ljava/lang/Integer;" or "Ljava/lang/Short;" or "Ljava/lang/Byte;" => (int)rawValue is >= -128 and <= 127,
+            "Ljava/lang/Character;" => (int)rawValue is >= 0 and <= 127,
+            "Ljava/lang/Long;" => (long)rawValue is >= -128 and <= 127,
+            _ => false
+        };
+        if (cacheable)
+        {
+            long key = type == "Ljava/lang/Long;" ? (long)rawValue : (int)rawValue;
+            lock (_boxedGate)
+            {
+                if (_boxedCache.TryGetValue((type, key), out var existing)) return existing;
+                var created = new DexObject(type);
+                Boxed.Add(created, new BoxedPeer(rawValue));
+                _boxedCache[(type, key)] = created;
+                return created;
+            }
+        }
+        var fresh = new DexObject(type);
+        Boxed.Add(fresh, new BoxedPeer(rawValue));
+        return fresh;
     }
 
     /// <summary>Returns the stable main Looper peer, creating it lazily. Under a
@@ -422,6 +491,7 @@ public sealed class AndroidFrameworkState : IDisposable
         Loopers.Clear();
         Handlers.Clear();
         Methods.Clear();
+        Boxed.Clear();
         Activity = null;
         SystemServices?.Dispose();
     }
@@ -688,6 +758,19 @@ internal sealed record PackagePeer(string Name);
 internal sealed record MethodPeer(string DeclaringClassDescriptor, string Name, string Descriptor);
 
 /// <summary>
+/// Underlying raw value of a guest boxed primitive (java.lang.Boolean/Integer/
+/// Long/Short/Byte/Character/Double/Float). The boxed object's own
+/// TypeDescriptor is the box type; this peer holds the value. Equality for the
+/// boxes is VALUE-based (unlike Class/Enum identity) — the binding compares
+/// RawValue, never object identity.
+/// </summary>
+internal sealed class BoxedPeer
+{
+    internal BoxedPeer(object rawValue) => RawValue = rawValue;
+    internal object RawValue { get; }
+}
+
+/// <summary>
 /// Completion/state for a guest java.util.concurrent.Future. State transitions:
 /// 0 pending, 1 running, 2 done, 3 cancelled. Completion is a ManualResetEvent so
 /// Future.get() genuinely blocks (releasing the GIL) like Thread.join does.
@@ -833,6 +916,7 @@ internal static class AndroidFrameworkHierarchy
         ["Ljava/lang/IndexOutOfBoundsException;"] = "Ljava/lang/RuntimeException;",
         ["Ljava/lang/ArrayIndexOutOfBoundsException;"] = "Ljava/lang/IndexOutOfBoundsException;",
         ["Ljava/lang/StringIndexOutOfBoundsException;"] = "Ljava/lang/IndexOutOfBoundsException;",
+        ["Ljava/lang/NumberFormatException;"] = "Ljava/lang/IllegalArgumentException;",
         ["Ljava/lang/NegativeArraySizeException;"] = "Ljava/lang/RuntimeException;",
         ["Ljava/util/NoSuchElementException;"] = "Ljava/lang/RuntimeException;",
         ["Ljava/lang/InterruptedException;"] = "Ljava/lang/Exception;",
