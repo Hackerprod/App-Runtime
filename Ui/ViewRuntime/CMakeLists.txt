@@ -22,6 +22,7 @@ add_library(viewruntime_core SHARED
     src/android/constraint_solver.cpp
     src/android/constraint_widget.cpp
     src/android/stb_text_measurer.cpp
+    src/android/viewruntime_backend.cpp
     src/android/android_grid_layout.cpp
     src/android/android_display_list.cpp
     src/rendering/display_list_commands.cpp
@@ -110,6 +111,10 @@ if(VIEWRUNTIME_BUILD_TESTS)
     add_executable(viewruntime_text_measurer_test tests/test_text_measurer.cpp)
     target_link_libraries(viewruntime_text_measurer_test PRIVATE ViewRuntime::Core)
     add_test(NAME viewruntime.text-measurer COMMAND viewruntime_text_measurer_test)
+
+    add_executable(viewruntime_backend_test tests/test_viewruntime_backend.cpp)
+    target_link_libraries(viewruntime_backend_test PRIVATE ViewRuntime::Core)
+    add_test(NAME viewruntime.backend COMMAND viewruntime_backend_test)
 endif()
 
 set(VIEWRUNTIME_INSTALL_CMAKEDIR
