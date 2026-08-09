@@ -1,0 +1,186 @@
+# Android Runtime prototype
+
+This repository contains a deliberately bounded Android-to-Windows runtime slice. It reads a real APK and binary manifest, resolves the launcher Activity, interprets DEX lifecycle methods through `Resumed`, and exposes an observable API-binding boundary. The Windows host proves one real HWND binding; the core remains portable `net8.0`.
+
+## Architecture
+
+Binding registration is organized per-package under `ApiLayer\Bindings\` (e.g. `JavaLangBindings.cs` for `java.lang`), generalized from the existing `AndroidSystemServiceBindings` shape; older bindings still live in `AndroidApiBindings.cs` and migrate as they are touched, not retroactively.
+
+- **AndroidRuntime.Core (`net8.0`)**: APK/AXML/DEX parsing, interpreter, lifecycle state machine, immutable API registry snapshots, tracing, cancellation, execution lane, and host ports.
+- **AndroidRuntime.WindowsHost (`net8.0-windows`, WPF)**: real HWND/Dispatcher adapter and command-line host. WPF types never enter Core.
+- **Per-session isolation**: each hosted launch owns one serial Android execution lane, registry snapshot, Activity/window peer map, cancellation source, and bounded trace buffer.
+- **Close ownership**: closing the Activity window starts complete session shutdown. Callers can await `Termination`; repeated `DisposeAsync` calls join the same cleanup operation.
+- **Thread boundary**: DEX and lifecycle callbacks run on the serial execution lane. Window operations synchronously marshal to the WPF Dispatcher. The window exists and is associated before `onCreate`, is shown after `onStart`, and is visible before `onResume`.
+
+### Exact API portfolio
+
+| Owner | Exact methods/descriptors |
+| --- | --- |
+| `Object` | `<init>()V` (no-op super constructor for plain DEX classes) |
+| `AtomicReference` | `<init>()V`; `<init>(Object)V`; `get()Object`; `set(Object)V`; `compareAndSet(Object,Object)Z` (plain reference-identity CAS, no real synchronization — single serial lane) |
+| `WeakHashMap` | `<init>()V`; `put(Object,Object)Object`; `get(Object)Object`; `containsKey(Object)Z`; `remove(Object)Object`; `size()I` (bounded simplification: keys strongly referenced, no guest GC model; key equality is CLR equality, not guest-overridden equals()/hashCode()) |
+| `HashMap` | `<init>()V`; `put(Object,Object)Object`; `get(Object)Object`; `containsKey(Object)Z`; `remove(Object)Object`; `size()I` (null key supported via internal sentinel; key equality is CLR equality, not guest-overridden equals()/hashCode()) |
+| `ArrayList` | `<init>()V`; `<init>(I)V` (capacity accepted and ignored); `add(Object)Z`; `add(int,Object)V`; `get(I)Object`; `set(int,Object)Object`; `size()I`; `isEmpty()Z`; `remove(I)Object`; `contains(Object)Z`; `indexOf(Object)I`; `clear()V`; `iterator()Iterator` (out-of-range index ops throw guest IndexOutOfBoundsException; contains/indexOf use CLR equality) |
+| `CopyOnWriteArrayList` | `<init>()V`; `<init>(Collection)V` (copies modeled guest collections); `add(Object)Z`; `add(int,Object)V`; `get(I)Object`; `set(int,Object)Object`; `remove(I)Object`; `remove(Object)Z`; `contains(Object)Z`; `indexOf(Object)I`; `size()I`; `isEmpty()Z`; `clear()V`; `addIfAbsent(Object)Z`; `iterator()Iterator` |
+| `Iterator` | `hasNext()Z`; `next()Object` (snapshot iteration — captures elements at iterator() time; exhausted next() throws guest NoSuchElementException) |
+| `Enum` | `<init>(String,I)V`; `name()String`; `ordinal()I`; `toString()String` (defaults to name); `equals(Object)Z` (reference identity); `hashCode()I` (CLR identity hash); `compareTo(Enum)I` (ordinal compare) |
+| `AtomicInteger` | `<init>()V`; `<init>(I)V`; `get()I`; `set(I)V`; `getAndIncrement()I`; `incrementAndGet()I`; `getAndDecrement()I`; `decrementAndGet()I`; `getAndAdd(I)I`; `addAndGet(I)I`; `compareAndSet(II)Z` (plain read/modify/write, no real synchronization — single serial lane) |
+| `WeakReference` | `<init>(Object)V`; `get()Object`; `clear()V` (referent held strongly — no guest GC model, safe over-approximation like WeakHashMap) |
+| `CopyOnWriteArraySet` | `<init>()V`; `add(Object)Z` (real Set dedup semantics; scoped by inspecting the APK's full method-reference table — only these two are ever referenced) |
+| `Activity` | `<init>()V`; lifecycle stubs; `setTitle(CharSequence)V`; `getTitle()CharSequence`; `getLocalClassName()String`; `getIntent()Intent` |
+| `Context` | `getPackageName()String`; `getApplicationContext()Context` |
+| `Log` | `v/d/i/w/e/wtf(String,String)I`; `println(int,String,String)I`; `isLoggable(String,int)Z` |
+| `TextUtils` | `isEmpty(CharSequence)Z`; `equals(CharSequence,CharSequence)Z`; `getTrimmedLength(CharSequence)I` |
+| `String` | `length()I`; `isEmpty()Z`; `equals(Object)Z`; `equalsIgnoreCase(String)Z`; `startsWith(String)Z`; `endsWith(String)Z`; `contains(CharSequence)Z`; `indexOf(String)I`; `indexOf(String,int)I`; `concat(String)String`; `trim()String`; `toString()String`; `hashCode()I`; static `valueOf(I/Z/C)String` |
+| `StringBuilder` | constructors `()`, `(I)`, `(String)`; `append(String/CharSequence/int/boolean/char)`; `length()I`; `toString()String` |
+| `CharSequence` | `toString()String` |
+| `Color` | `rgb(III)I`; `argb(IIII)I`; `alpha/red/green/blue(I)I` |
+| `Bundle` / `BaseBundle` | constructors `()`, `(I)`, shallow copy; typed String/int/long/boolean put/get plus defaults; `containsKey`, `remove`, `clear`, `size`, `isEmpty` |
+| `SystemClock` | `uptimeMillis()J`; `elapsedRealtime()J`; `elapsedRealtimeNanos()J` through an injected monotonic clock port |
+| `Intent` | constructors `()`, `(String)`; action get/set; String/int/boolean extras; `hasExtra`; `removeExtra` |
+| `Toast` | `makeText(Context,CharSequence,int)`; `show`; `cancel`; duration get/set; `setText(CharSequence)` |
+| `Activity` UI | `setContentView(int)`; `findViewById(int)` |
+| `View` | `findViewById(int)`; `getId`; enabled and visibility state; `setOnClickListener`; `performClick` |
+| `TextView` / `Button` | `setText(CharSequence)`; `getText`; retained `LinearLayout`/`TextView`/`Button` peers |
+| `Throwable` hierarchy | constructors `()`, `(String)`, `(String,Throwable)`; `getMessage()String`; `toString()String` for the bounded Error/Exception hierarchy |
+| `Context` services | `getSystemService(String)Object`; exact stable per-session ClipboardManager and ConnectivityManager; unknown/adapter-absent returns null |
+| `ClipData` / `Item` | `newPlainText(CharSequence,CharSequence)`; `getItemCount`; `getItemAt`; Item `getText`; `coerceToText(Context)` |
+| `ClipboardManager` | `setPrimaryClip`; `getPrimaryClip`; `hasPrimaryClip`; `clearPrimaryClip` for one plain-text item |
+| `ConnectivityManager` | `getActiveNetwork`; `getNetworkCapabilities`; honest `isActiveNetworkMetered` (unavailable when host cannot know) |
+| `NetworkCapabilities` | `hasCapability(int)` for INTERNET/VALIDATED/NOT_METERED/NOT_RESTRICTED/NOT_VPN/NOT_ROAMING; `hasTransport(int)` for CELLULAR/WIFI/ETHERNET/VPN; unknown constants false |
+
+Framework lookup is exact and bounded through `Activity → ContextThemeWrapper → ContextWrapper → Context` and `Bundle → BaseBundle`, plus DEX-defined superclass chains. Bundle, Intent, StringBuilder, Toast, launcher Intent, and application Context state live in typed per-session peer stores rather than guest fields. Per-type peer quotas are configurable and fail closed; hosted-session termination deterministically clears every peer store. The launcher Intent is stable per session with `android.intent.action.MAIN`; the application Context is a distinct stable object.
+
+Logs use finite Android priorities 2–7 with configurable minimum priority and retain session/package/Activity/invocation attribution. Text Toasts enforce configurable text, queue, duration, and per-minute limits. The Windows host composites Toast text into the same retained child-HWND surface as Android content, avoiding WPF/Win32 airspace conflicts, and uses a generation-checked `DispatcherTimer`.
+
+`String.equalsIgnoreCase` decodes valid UTF-16 surrogate pairs and compares Unicode code points using Java's upper-then-lower algorithm; unpaired surrogates remain deterministic individual code units. Its simple-case mapping is pinned to Microsoft OpenJDK 17.0.20 / Java SE 17 (`Character`, Unicode 13.0). A bounded override set covers 12 BMP mappings and the compact Vithkuqi range where the newer .NET 10 Unicode profile differs.
+
+Semantic references: [Android Activity](https://developer.android.com/reference/android/app/Activity), [Context](https://developer.android.com/reference/android/content/Context), [BaseBundle](https://developer.android.com/reference/android/os/BaseBundle), [Intent](https://developer.android.com/reference/android/content/Intent), [Log](https://developer.android.com/reference/android/util/Log), [TextUtils](https://developer.android.com/reference/android/text/TextUtils), [Color](https://developer.android.com/reference/android/graphics/Color), [Toast](https://developer.android.com/reference/android/widget/Toast), and [Microsoft WPF live-region guidance](https://learn.microsoft.com/en-us/accessibility-tools-docs/items/wpf/text_livesetting).
+
+API identity is only class descriptor + method name + full method descriptor. Invoke kind is call-site metadata, never part of the registry key. Missing APIs emit `Unimplemented` and throw `AndroidApiNotImplementedException`; there is no silent default.
+
+## Windows CLI
+
+```powershell
+AndroidRuntime.WindowsHost.exe <apk> [--auto-close-ms <100..600000>] [--trace <path>] [--grant-clipboard-read] [--grant-clipboard-write] [--grant-network-state]
+```
+
+- Missing/invalid arguments return exit code `2`.
+- Cancellation returns `3`.
+- Runtime/host failures return `1`.
+- A successful close returns `0`.
+- `--auto-close-ms` is intended for bounded smoke automation.
+- Trace output is normalized with Windows case-insensitive path semantics and rejected before launch when it aliases the input APK.
+- Clipboard read, clipboard write, and network-state capabilities default to deny and require their separate explicit grant flags. Duplicate or unknown grants are usage errors.
+- Connectivity additionally requires a direct manifest `android.permission.ACCESS_NETWORK_STATE` declaration. Unknown services and unavailable adapters return null; a denied lookup/operation throws a catchable guest `SecurityException`.
+
+Run the checked smoke harness after building:
+
+```powershell
+.\scripts\smoke-windows-host.ps1
+```
+
+It verifies a non-zero HWND, the DEX-provided title `RuntimeProbe DEX`, bounded auto-close, exit code zero, and parses every JSON-lines trace event under `artifacts/smoke/`. It requires one session identity, one `Requested`-to-terminal pair per invocation UUID, and a completed `setTitle` binding. Cleanup uses APIs compatible with Windows PowerShell 5.1.
+
+## Trace model
+
+Every API attempt produces correlated events from this set: `Requested`, `Completed`, `Unimplemented`, `Failed`, or `Cancelled`; guest throws additionally emit a redacted `GuestThrew` event. Fields include:
+
+- session sequence and invocation UUID;
+- exact caller and DEX program counter;
+- requested and resolved API identity;
+- invoke kind;
+- summarized/redacted arguments;
+- managed thread and Android main-lane flag;
+- cancellation token context;
+- session, package, and Activity identity;
+- terminal error type when applicable.
+
+Trace sinks are non-authoritative and non-throwing. `AndroidApiTraceBuffer` is bounded and reports `DroppedCount` when older events are evicted.
+
+## Honest limits
+
+This is a production-shaped boundary, not a production-complete Android implementation. It does **not** claim CTS compatibility, the Android View toolkit, resources, Binder, JNI, complete Android permissions, a complete Looper/Handler, task/back-stack semantics, or configuration changes. Wide execution is intentionally limited to the documented long/double register, field, array, conversion, comparison, and arithmetic opcodes; it is not a full verifier. DEX exception support parses bounded, non-overlapping `try_item`/encoded-handler tables, runs ordered typed or catch-all handlers, preserves throwable identity across frame unwinding, and exposes sanitized uncaught errors. It omits suppressed exceptions, host stack exposure, `printStackTrace`, and guest stack-trace mutation. Cancellation, malformed DEX, quotas, and unexpected host/backend failures remain non-catchable control-plane errors. Clipboard support is plain Unicode text only, focus-gated for reads, bounded, and has no listeners/rich formats/URI items. The default Windows clipboard adapter uses a dedicated STA Dispatcher, persistence copy, bounded retry/deadline, and is tested through an injected non-global backend; automated smoke never reads or mutates the user's global clipboard. Connectivity is one immutable default-network snapshot only: the coarse Windows adapter never performs HTTP probes, never exposes names/IP/GUID/SSID, reports VALIDATED false and metering unavailable rather than fabricating them, and omits callbacks/all-networks. Windows uptime uses unbiased interrupt time (precise when exported, documented fallback otherwise), elapsed realtime uses `GetTickCount64`, and elapsed nanos uses the monotonic performance counter. Deliberately deferred APIs include Log Throwable overloads, Parcelable/Parcel/Uri/component Intent behavior, rich clipboard/listeners, network callbacks/details, Toast resource IDs, and custom Toast Views.
+
+Hardening invariants are fail-closed: array opcodes must match their exact primitive/reference component category, primitive arrays are invariant, and reference arrays use recursive Java covariance across dimensions and DEX/framework class hierarchies. Every array is assignable to `Object`, `Cloneable`, and `Serializable`; mixed dimensions still follow component assignability rather than shape guessing. Array arguments, casts, stores, and returns use the same descriptor rules. `move-result*` must immediately follow the producing invoke with the matching word/reference/wide kind. Exception-table padding must be zero and bounded ULEB32/SLEB32 encodings reject invalid fifth-byte overflow/sign extension. Manifest permissions are immutable defensive snapshots. Every service Context, manager, ClipData/Item, Network, and NetworkCapabilities peer is owned by exactly one runtime session; cross-session objects are rejected before backend access. Clipboard and connectivity calls carry the invocation cancellation token through the adapter boundary.
+
+CLR array values crossing an API binding are converted through one recursive descriptor matrix covering `Z/B/S/C/I/J/F/D`, `String`, `Object`, generic `DexObject`/`DexArray` wrappers, and jagged rank-one arrays. Rectangular CLR arrays (`Array.Rank != 1`) are always rejected because Java multidimensional arrays are arrays of array references, not rectangular storage. The resulting Java descriptor is then evaluated by the same covariance and primitive-invariance rules; CLR shape never bypasses guest assignability.
+
+## Work-unit rollback boundaries
+
+1. **API boundary**: revert `ApiLayer/AndroidApiRegistry.cs`, interpreter call-site context/cancellation changes, and `AndroidApiBoundaryTests.cs` together.
+2. **Host/lifetime**: remove `Hosting/`, `AndroidRuntime.WindowsHost/`, its test project, solution entries, and smoke script. Core APK/DEX/lifecycle execution remains.
+3. **Bindings/fixture**: remove `AndroidApiBindings.cs`, restore the fixture before `setTitle`/`Log.i`, and remove hosted integration tests. The observable registry boundary and host ports remain independently usable.
+4. **Verification hardening**: revert CLI collision validation, close-triggered termination, contextual log entries, the `UnimplementedApiProbe.apk` variant, and smoke JSON validation together without affecting parsing or lifecycle semantics.
+5. **Dispatch and semantic hardening**: revert invoke-kind dispatch, typed guest arithmetic/null errors, exact return assignability, peer quotas/cleanup, and Toast acceptance accounting together; the earlier binding portfolio remains but loses these correctness guarantees.
+6. **Wide values and clocks**: revert `DexArray.cs`, wide opcode/frame changes in `DexInterpreter.cs`, `IAndroidClock`/`WindowsAndroidClock`, SystemClock and Bundle-long bindings, and their tests together.
+7. **Portable framework portfolio**: revert `AndroidFrameworkState.cs`, the expanded bindings, generalized lookup/reference branches, Toast ports/WPF overlay, and portfolio fixture/tests together. The earlier lifecycle, title, and single Log.i slice remains independently recoverable.
+8. **Guest exceptions**: revert DEX try/handler models and parsing, guest throwable/carrier/public exception types, `throw`/`move-exception` execution, Throwable bindings/hierarchy, `GuestThrew` tracing, `ExceptionProbe.apk`, and focused tests together. Wide execution and the earlier hosted lifecycle remain independently usable.
+9. **Governed services**: revert manifest permissions, capability/audit/clipboard/connectivity ports, `AndroidSystemServices.cs`, Windows adapters and CLI grant flags, ServicesProbe variants, tests, and service documentation together. Guest exceptions, lifecycle, and earlier bindings remain independent.
+10. **Runtime hardening correction**: revert typed array enforcement, immediate `move-result*` tracking, strict code-item padding/LEB parsing, immutable permission snapshots, service peer ownership/cancellation, retryable clipboard dispatcher shutdown, and their focused tests together. This does not remove the WU1-WU5 feature surface.
+11. **Headless Android UI bindings**: revert `Ui/AndroidLayoutInflater.cs`, `Ui/AndroidUiSession.cs`, the View peer/binding/interpreter additions, `UiProbe` callback fixture, and `AndroidUiRuntimeIntegrationTests.cs` together. Resource parsing and the retained scene foundation remain independently usable.
+12. **Windows retained surface**: revert AndroidRuntime.WindowsHost/WindowsRetainedRenderer.cs, AndroidHwndRenderSurface.cs, the IAndroidUiSurfaceHost attach port, and their Windows tests together. Headless Android UI remains independently usable.
+13. **Multidex APK support**: revert `LoadedApk.ClassesDexFiles`/`ApkLoader` numeric collection and secondary-DEX quotas, `DexFileSet`, the `DexEncodedMethod.OwningDex` ownership stamp, `DexInterpreter` merged lookup and frame-local pool resolution, `AndroidAppRuntime` per-file verify/parse, the multidex tests, and this entry together. Single-dex loading and dispatch remain independently usable.
+14. **ARSC Modified UTF-8**: revert the `AndroidBinaryFormat.ReadUtf8` CESU-8/Modified-UTF-8 decode (surrogate-half acceptance, 0xC0 0x80 NUL, fail-closed malformed-sequence handling) and `AndroidBinaryFormatUtf8Tests.cs` together. Resource-table, manifest, and layout parsing remain independently usable; genuinely malformed strings still fail closed in either version.
+15. **ARSC complex entries skip**: revert the `AndroidResourceTable.ParseType` complex-entry skip (FLAG_COMPLEX entries continue instead of throwing, global entry quota counts skipped entries) and the updated `AndroidResourceTests` complex-entry case together. Truncation/malformed fail-closed behavior and the honest ARSC_NOT_FOUND lookup boundary remain in either version.
+16. **ARSC typed values (fraction)**: revert the `AndroidFractionUnit`/`AndroidFraction`/`AndroidResourceValueKind.Fraction` additions, the `FromBinary` 0x06 wiring, the shared `DecodeComplexMantissa` refactor (same multipliers as the original `DecodeDimension`: {256, 32768, 8388608, 2147483648}, verified against AOSP fixed-point formats 23p0/16p7/8p15/0p23), and the fraction/dimension tests together. Dynamic references 0x07/0x08 were investigated (probed the real SKYNET resources.arsc: 0 ResTable_lib_header 0x0203 chunks, 0 dynamic values) and remain honestly throwing ARSC_UNSUPPORTED — not silently approximated.
+17. **DEX monitor-enter/monitor-exit**: revert the `DexOpcodeTable` F11x metadata for 0x1d/0x1e (format switch + supported range), the `DexInterpreter` no-op dispatch cases (null-checked, deliberately no monitor state for the single-threaded lane), and the verifier/interpreter tests together. Synchronized methods remain un-executable in the reverted state, and the verifier metadata test returns to excluding 0x1d/0x1e.
+18. **DEX packed/sparse-switch**: revert the `DexOpcodeTable` F31 metadata for 0x2b/0x2c, the `DexVerifier.ValidateFlow` switch branch-target + payload-kind confirmation, the `DexInterpreter` switch dispatch and payload parsers (packed 4+2·size units, sparse 2+4·size units, targets relative to the switch pc, sparse keys verified ascending), the minimal-DEX verifier builder/tests, and the interpreter switch tests together. Switch statements remain un-executable in the reverted state.
+19. **DEX filled-new-array**: revert the `DexOpcodeTable` F35c/F3rc metadata for 0x24/0x25, the `DexVerifier` type-pool index check for them, the `DexInterpreter` array-allocation dispatch cases (type-id operand, length = argument count, DexArray fill, lastInvokeResult publication), and the filled-new-array tests together. Fresh-array literals remain un-executable in the reverted state.
+20. **DEX float arithmetic**: revert the `DexOpcodeTable` F23x/F12x metadata for cmpl/cmpg-float (0x2d/0x2e), float 23x (0xa6..0xaa) and float /2addr (0xc6..0xca), the `DexInterpreter` FloatBinOp helper, the three dispatch cases, the float arg/return int-bit boundary handling in `LoadArguments`/`UnwrapRootReturn`, and the float tests together. Float-typed methods remain un-executable in the reverted state.
+21. **DEX neg-float**: revert the `DexOpcodeTable` F12x metadata for 0x7f, the `DexInterpreter` neg-float dispatch case (single-width sign-bit flip), and its float test together. Unary float negation remains un-executable in the reverted state.
+22. **DEX fill-array-data**: revert the `DexOpcodeTable` F31 metadata for 0x26, the `DexVerifier.ValidateFlow` kind-3 payload confirmation, the `DexInterpreter` dispatch case + `FillArrayFromPayload`/`ReadPackedBytes` helpers (element-width/component match, size <= Length, Set/SetWide by component), and the fill-array-data tests together. Array literals with constant initializers remain un-executable in the reverted state.
+23. **DEX iput-short**: revert the `DexOpcodeTable` F22c metadata for 0x5f (instance-field-put family now complete) and the iput-short round-trip test together. The raw no-truncation field store behavior is unchanged from the rest of the iget/iput family.
+24. **API Object.<init>**: revert the `RegisterVoid(builder, "Ljava/lang/Object;", "<init>", "()V")` binding, the README portfolio `Object` row, and the plain-class construction test together. Plain DEX classes extending java.lang.Object directly fail at their first super() call in the reverted state.
+25. **DEX interface assignability**: revert the `DexClass.Interfaces` field + `DexReader` interfaces_off parsing and `ReadTypeList` extraction, the `IsAssignable` interface-walk extension (4-arg overload, `InterfaceClosureContains` with cycle/depth guards), the `DexInterpreter.InterfacesOf` wiring, and the interface-assignability tests together. Guest interface-typed arguments remain rejected in the reverted state.
+26. **API AtomicReference**: revert the `AtomicReferencePeer` class, the `AndroidPeerLimits.MaxAtomicReferences` + state store/property/Clear touch points, the five `AndroidApiBindings` bindings, the README portfolio row, and the atomic-reference tests together. AtomicReference calls remain unbound in the reverted state.
+27. **API WeakHashMap**: revert the `WeakHashMapPeer` class, the `AndroidPeerLimits.MaxWeakHashMaps` + state store/property/Clear touch points, the six `AndroidApiBindings` bindings, the README portfolio row, and the weak-hash-map tests together. WeakHashMap calls remain unbound in the reverted state.
+28. **API HashMap**: revert the `HashMapPeer` class (null-key sentinel, distinct from WeakHashMapPeer), the `AndroidPeerLimits.MaxHashMaps` + state store/property/Clear touch points, the six `AndroidApiBindings` bindings, the README portfolio row, and the hash-map tests together. HashMap calls remain unbound in the reverted state.
+29. **API ArrayList**: revert the `ArrayListPeer` class, the `AndroidPeerLimits.MaxArrayLists` + state store/property/Clear touch points, the seven `AndroidApiBindings` bindings, the README portfolio row, and the array-list tests together. ArrayList calls remain unbound in the reverted state.
+30. **API WeakReference**: revert the `WeakReferencePeer` class, the `AndroidPeerLimits.MaxWeakReferences` + state store/property/Clear touch points, the three `AndroidApiBindings` bindings, the README portfolio row, and the weak-reference tests together. WeakReference calls remain unbound in the reverted state.
+31. **API CopyOnWriteArraySet**: revert the `AndroidPeerLimits.MaxCopyOnWriteArraySets` + state store/property/Clear touch points, the two `AndroidApiBindings` bindings (using `HashSet<object?>` directly as the peer value), the README portfolio row, and the copy-on-write tests together. CopyOnWriteArraySet calls remain unbound in the reverted state.
+32. **Framework interface hierarchy**: revert the `AndroidFrameworkHierarchy.Interfaces` table + `InterfacesOf` (Set/List/Map/Collection edges for the bound collection classes), and the `DexInterpreter.InterfacesOf` guest+framework merge together. Interface-typed assignments of framework collection classes fail at check-cast in the reverted state.
+33. **List completion + Iterator**: revert the `ListPeer` rename/sharing, `IteratorPeer` snapshot mechanism, `AndroidPeerLimits.MaxIterators`/`MaxCopyOnWriteArrayLists` + state store/property/Clear touch points, the completed ArrayList surface, the full CopyOnWriteArrayList surface, the Iterator bindings, the NoSuchElementException hierarchy entry, the README portfolio rows, and the list/iterator tests together. The list and iterator APIs return to their earlier partial/unbound states.
+34. **DEX class initialization**: revert the `EnsureClassInitialized` helper, the per-session `_classInitState` tracking, the three trigger points (new-instance, sget/sput, invoke-static), and the class-initialization tests together. Guest `<clinit>()V` methods return to never running, and static fields stay at defaults in the reverted state.
+35. **API Enum + Bindings convention**: revert `EnumPeer`/`MaxEnums` + state touch points, the `ApiLayer\Bindings\JavaLangBindings.cs` file (moved `Object.<init>` plus the Enum bindings), the `CreateBuilder` wiring, the README portfolio `Enum` row, and the enum tests together. Enum calls return to unbound and Object.<init> moves back into the monolith.
+36. **API AtomicInteger + atomic package file**: revert `AtomicIntegerPeer`/`MaxAtomicIntegers` + state touch points, `ApiLayer\Bindings\JavaUtilConcurrentAtomicBindings.cs` (moved AtomicReference + new AtomicInteger), the `CreateBuilder` wiring, the README portfolio `AtomicInteger` row, and the atomic-integer tests together. AtomicInteger calls return to unbound and AtomicReference moves back into the monolith.
+
+No commits are required for these boundaries; each is a coherent reversible behavior unit.
+# Production boundaries added in the current work units
+
+## Android retained UI foundation
+
+The portable Core now includes the first retained Android scene boundary under `AndroidRuntime.Core.Ui`: stable `AndroidViewNode` identities, `AndroidMeasureSpec`, deterministic dp/sp metrics, horizontal/vertical `AndroidLinearLayoutNode`, `AndroidTextViewNode`, `AndroidButtonNode`, immutable typed display lists, recording renderer, coalesced invalidation, retained frame revisions with stale-frame rejection, semantic snapshots, hit testing, and hostile-tree/display/invalidation quotas. The architecture follows the retained-host and renderer-port roles studied in AetherUI without referencing that repository or importing HTML/DOM/CSS semantics. No AetherUI source was copied.
+
+`ApkLoader` also exposes bounded immutable snapshots for optional `resources.arsc` and canonical `res/` files, with entry/per-file/aggregate/compression-ratio quotas. `AndroidBinaryXmlReader` provides a generic event stream and retained tree for compiled XML. `AndroidResourceTable` validates package/type/typeSpec chunks and resolves simple string, color, dimension, integer, boolean, and reference values; `AndroidResourceResolver` selects default/density configurations deterministically, detects reference cycles, enforces depth/count/string-byte quotas, and loads canonical `res/layout*.xml` entries by symbolic name or resource ID. `AndroidLayoutInflater` maps the supported compiled XML elements and attributes into scene nodes without fixture constants. Per-session bidirectional DEX View peers remain stable until teardown, declarative `android:onClick` resolves only an exact public Activity callback, and all guest UI callbacks execute on the Android execution lane. Text mutation invalidates layout/display data without reinflating the tree.
+
+The Windows host mounts a dedicated child HWND for Android pixels; no renderer targets the WPF top-level window. The Android lane publishes immutable revisioned display snapshots through a single-post coalescer, stale revisions are rejected, and pointer/keyboard work is enqueued back to the lane before a resulting snapshot is requested. Rendering and capture share the same deterministic BGRA backing representation at 96/120/144 DPI. The current backend is the bounded software fallback, not AetherUI's Direct2D/WARP implementation: solid rectangles and deterministic text-cell painting are supported, while DirectWrite shaping, GPU device recovery, individual UIA fragment providers, complex/bag entries, sparse type chunks, locale/night/orientation selection, overlays, themes/styles, drawable resources, and scrolling remain explicit subsequent work. No AetherUI source is copied or linked.
+
+The signed `UiProbe.apk` fixture is built from real `aapt2`-compiled `LinearLayout`/`TextView`/`Button` XML plus string, color, dimension, ID, and layout resources. Its build runs `aapt2 dump xmltree`, `aapt2 dump resources`, and `apksigner verify`; tests discover resource IDs and compiled file paths from the table rather than embedding fixture IDs.
+
+## Reverse Activity lifecycle
+
+Hosted sessions execute `onPause()V`, `onStop()V`, and `onDestroy()V` on the per-session Android execution lane before cancellation and peer disposal. The explicit state machine is `Constructed -> Created -> Started -> Resumed -> Paused -> Stopped -> Destroyed`, with `Faulted` terminal failure. Termination is idempotent and runs only the valid suffix from the last successful forward checkpoint. `Activity.finish()V`, `isFinishing()Z`, and `isDestroyed()Z` are exact bounded bindings. A WPF user-close request is deferred until guest teardown completes. This is not a full Android task/back-stack or configuration-change implementation.
+
+## Governed power services
+
+Power access is denied by default and enabled explicitly by the host CLI with `--grant-power`. `Context.getSystemService("batterymanager")` and `Context.getSystemService("power")` return stable, session-owned peers only when the host adapter is available and policy permits lookup. Exact bindings are:
+
+- `BatteryManager.getIntProperty(I)I`
+- `BatteryManager.getLongProperty(I)J`
+- `BatteryManager.isCharging()Z`
+- `PowerManager.isPowerSaveMode()Z`
+
+The Core port is an immutable `HostPowerSnapshot`. Windows uses `GetSystemPowerStatus`; capacity, charging, battery presence, and saver mode are reported only when the OS exposes them. Unsupported int properties return `0` for target SDK below 28 and `Integer.MIN_VALUE` otherwise; unsupported long properties return `Long.MIN_VALUE`. Audit events contain operation/result metadata only. Interactive/idle state and wake locks are intentionally deferred.
+
+## Structural DEX verification
+
+Every production launch now passes through `DexVerifier` before parsing/execution. It validates the standard SHA-1 signature and Adler-32 checksum, supported DEX version and complete header, every map item identity/order/range, declared sections, parse integrity, and every method instruction stream. All interpreter opcodes share explicit format/width metadata; opcodes without metadata fail closed as unsupported. Format-specific checks cover every register operand and wide pair, pool references, branch alignment, immediate typed `move-result`, invoke word/range/`outs_size` consistency, payload bounds, and strict try/handler checks. Verification has deterministic file/method/instruction budgets and stable malformed-versus-unsupported diagnostics. `scripts/fuzz-dex.ps1` runs the bounded seeded mutation corpus.
+
+This is deliberately **not** the full ART type verifier: it does not prove all data-flow types, monitor discipline, or every verifier rule for opcodes outside the interpreter portfolio. Guest class initialization itself now runs in the interpreter (`<clinit>()V` executes exactly once per session at the new-instance/static-field/static-method triggers, superclass before subclass, single-lane cycle handling), but the verifier does not prove its correctness, and reflection-based triggers (`Class.forName` with initialize=true) are not modeled.
+
+## Windows packaging
+
+`scripts/package-win-x64.ps1` creates a self-contained, multi-file `win-x64` Release package using `Properties/PublishProfiles/win-x64.pubxml`. Trimming, single-file bundling, ReadyToRun, and product PDBs are explicitly disabled. Output is restricted to a non-reparse descendant of the repository-local `artifacts` directory before any recursive cleanup. The staged package includes sorted shipped-file and dependency inventories, an explicit signing-status marker, and a deterministic ZIP with fixed entry timestamps/order. `SHIPPED-FILES.txt` declares its self-reference semantics; the final archive SHA-256 is emitted beside, not recursively inside, the ZIP. Signing is optional through `-SigningHook`; without it the package is explicitly unsigned. The dependency inventory is not claimed to be a standards-format SBOM.
+
+Rollback boundaries are independent: reverse lifecycle/session shutdown, power ports/bindings/Windows adapter, verifier/runtime gate/fuzz corpus, and publish profile/package script can each be reverted without reverting the other work units.

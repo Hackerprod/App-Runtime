@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">UI Probe</string>
+    <string name="title">Ready</string>
+    <string name="action">Tap</string>
+    <string name="clicked">Clicked</string>
+    <color name="accent">#336699</color>
+    <dimen name="content_padding">16dp</dimen>
+    <dimen name="title_size">24sp</dimen>
+</resources>
