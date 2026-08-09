@@ -11,7 +11,7 @@ namespace AndroidRuntime.Core.ApiLayer;
 
 public sealed record AndroidPeerLimits
 {
-    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024, int maxBoxed = 1024, int maxMapEntries = 1024, int maxMapViews = 256, int maxLazies = 256, int maxArrayDeques = 256)
+    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024, int maxBoxed = 1024, int maxMapEntries = 1024, int maxMapViews = 256, int maxLazies = 256, int maxArrayDeques = 256, int maxLinkedHashSets = 256)
     {
         StringBuilders = maxStringBuilders;
         Bundles = maxBundles;
@@ -39,6 +39,7 @@ public sealed record AndroidPeerLimits
         MapViews = maxMapViews;
         Lazies = maxLazies;
         ArrayDeques = maxArrayDeques;
+        LinkedHashSets = maxLinkedHashSets;
         Validate();
     }
 
@@ -69,10 +70,11 @@ public sealed record AndroidPeerLimits
     public int MapViews { get; }
     public int Lazies { get; }
     public int ArrayDeques { get; }
+    public int LinkedHashSets { get; }
 
     public void Validate()
     {
-        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0 || Boxed <= 0 || MapEntries <= 0 || MapViews <= 0 || Lazies <= 0 || ArrayDeques <= 0)
+        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0 || Boxed <= 0 || MapEntries <= 0 || MapViews <= 0 || Lazies <= 0 || ArrayDeques <= 0 || LinkedHashSets <= 0)
             throw new ArgumentOutOfRangeException(nameof(AndroidPeerLimits), "Peer limits must be positive.");
     }
 }
@@ -164,6 +166,7 @@ public sealed class AndroidFrameworkState : IDisposable
         MapViews = new AndroidPeerStore<HashSet<object?>>("MapView", PeerLimits.MapViews);
         Lazies = new AndroidPeerStore<LazyPeer>("Lazy", PeerLimits.Lazies);
         ArrayDeques = new AndroidPeerStore<ListPeer>("ArrayDeque", PeerLimits.ArrayDeques);
+        LinkedHashSets = new AndroidPeerStore<OrderedSetPeer>("LinkedHashSet", PeerLimits.LinkedHashSets);
         ApplicationContext = new DexObject("Landroid/app/Application;");
         LauncherIntent = new DexObject("Landroid/content/Intent;");
         Intents.Add(LauncherIntent, new IntentPeer { Action = "android.intent.action.MAIN" });
@@ -220,6 +223,7 @@ public sealed class AndroidFrameworkState : IDisposable
     internal AndroidPeerStore<HashSet<object?>> MapViews { get; }
     internal AndroidPeerStore<LazyPeer> Lazies { get; }
     internal AndroidPeerStore<ListPeer> ArrayDeques { get; }
+    internal AndroidPeerStore<OrderedSetPeer> LinkedHashSets { get; }
     /// <summary>The session's GIL: shared by the interpreter and every binding that
     /// must release it around real blocking (sleep/join/monitor-enter/class-init
     /// wait). AndroidAppRuntime replaces this with the execution lane's GIL.</summary>
@@ -512,6 +516,7 @@ public sealed class AndroidFrameworkState : IDisposable
         MapViews.Clear();
         Lazies.Clear();
         ArrayDeques.Clear();
+        LinkedHashSets.Clear();
         Activity = null;
         SystemServices?.Dispose();
     }
@@ -850,6 +855,31 @@ internal sealed class LazyPeer
     internal required DexObject Function0 { get; init; }
     internal bool Computed { get; set; }
     internal object? CachedValue { get; set; }
+}
+
+/// <summary>
+/// State for a guest java.util.LinkedHashSet: ORDER-PRESERVING set semantics.
+/// Deliberately NOT the raw HashSet<object?> peer used by CopyOnWriteArraySet —
+/// .NET does not reliably guarantee enumeration order for HashSet. A
+/// List<object?> keeps insertion order and a linear Contains check before Add
+/// preserves no-duplicate set semantics; obviously correct and fast enough at
+/// this runtime's bounded quotas. A duplicate add returns false and does NOT
+/// move the element (insertion order of first occurrence, not most-recent-touch
+/// — unlike LinkedHashMap's optional access-order mode, which does not apply).
+/// Remove then re-add DOES move the element to the end (fresh insertion).
+/// </summary>
+internal sealed class OrderedSetPeer
+{
+    internal List<object?> Elements { get; } = new();
+    internal bool Add(object? value)
+    {
+        if (Elements.Contains(value)) return false;
+        Elements.Add(value);
+        return true;
+    }
+    internal bool Remove(object? value) => Elements.Remove(value);
+    internal int Count => Elements.Count;
+    internal void Clear() => Elements.Clear();
 }
 
 /// <summary>

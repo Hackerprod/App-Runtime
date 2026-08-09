@@ -96,6 +96,7 @@ public static class AndroidApiBindings
 		JavaUtilMapBindings.Register(builder, state);
 		JavaUtilCollectionsBindings.Register(builder, state);
 		JavaUtilArrayDequeBindings.Register(builder, state);
+		JavaUtilLinkedHashSetBindings.Register(builder, state);
 		RegisterWeakHashMaps(builder, state);
 		RegisterHashMaps(builder, state);
 		RegisterArrayLists(builder, state);
