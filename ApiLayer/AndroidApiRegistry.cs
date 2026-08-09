@@ -388,6 +388,8 @@ public sealed class AndroidApiRegistry
         if (api.ClassDescriptor == "Lkotlin/collections/CollectionsKt;" && api.MethodName is "sort" or "mutableListOf" or "binarySearch" or "binarySearch$default") return true;
         // java.util.Arrays is a static utility class.
         if (api.ClassDescriptor == "Ljava/util/Arrays;" && api.MethodName == "copyOf") return true;
+        // java.lang.Math is a static utility class.
+        if (api.ClassDescriptor == "Ljava/lang/Math;") return true;
         // Class.forName is static; the blanket instance default below would otherwise
         // misreport a genuine static call as a shape mismatch instead of the honest
         // unimplemented boundary.
