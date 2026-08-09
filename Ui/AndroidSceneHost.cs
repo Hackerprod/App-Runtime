@@ -43,6 +43,16 @@ public abstract class AndroidViewNode
     private AndroidColor? _backgroundColor;
     protected AndroidViewNode(int resourceId) => ResourceId = resourceId;
     public int ResourceId { get; }
+    /// <summary>Additional resource ids this view answers to (real Android views
+    /// can be looked up by several ids; appcompat's scaffold ContentFrameLayout
+    /// is registered under both its own id and android.R.id.content).</summary>
+    public List<int> AliasIds { get; } = [];
+    public bool MatchesId(int id) => ResourceId == id || AliasIds.Contains(id);
+    /// <summary>The guest descriptor this node is registered under (defaults to
+    /// the canonical widget descriptor; appcompat scaffold classes like
+    /// ContentFrameLayout register under their own class so casts/findViewById
+    /// resolve).</summary>
+    public string? GuestDescriptor { get; set; }
     public string? ContentDescription { get; set; }
     public string? XmlOnClick { get; set; }
     public AndroidLayoutDimension LayoutWidth { get; set; } = AndroidLayoutDimension.MatchParent;
@@ -61,7 +71,7 @@ public abstract class AndroidViewNode
     internal abstract AndroidSize Measure(AndroidMeasureSpec width, AndroidMeasureSpec height, AndroidUiContext context);
     internal virtual void Layout(float x, float y, float width, float height, AndroidUiContext context) => Bounds = new(x, y, width, height);
     internal virtual void Record(List<AndroidDrawCommand> commands, AndroidUiContext context) { if (Visibility != AndroidViewVisibility.Visible) return; if (BackgroundColor is { } color) commands.Add(new AndroidFillRectCommand(Bounds, color, ResourceId)); foreach (AndroidViewNode child in _children) child.Record(commands, context); }
-    public AndroidViewNode? FindById(int id) { if (ResourceId == id) return this; foreach (AndroidViewNode child in _children) if (child.FindById(id) is { } found) return found; return null; }
+    public AndroidViewNode? FindById(int id) { if (MatchesId(id)) return this; foreach (AndroidViewNode child in _children) if (child.FindById(id) is { } found) return found; return null; }
 }
 
 public sealed class AndroidLinearLayoutNode : AndroidViewNode
@@ -113,6 +123,28 @@ public sealed class AndroidButtonNode : AndroidTextViewNode
 {
     public AndroidButtonNode(int resourceId) : base(resourceId) { Focusable = true; BackgroundColor = new(255, 224, 224, 224); }
     internal override AndroidSize Measure(AndroidMeasureSpec width, AndroidMeasureSpec height, AndroidUiContext context) { AndroidSize text = base.Measure(width, height, context); return MeasuredSize = new(text.Width, Math.Min(height.Size, text.Height + 24 * context.Density)); }
+}
+
+/// <summary>
+/// An android.widget.ImageView peer. The deliberately bounded platform subset
+/// renders NO bitmap/drawable content (no image decoding pipeline exists): the
+/// node renders only its background color (or nothing), inflates, measures, and
+/// lays out like a real ImageView, and stays clickable/findable. The layout
+/// inflater IGNORES the src/imageResource attributes rather than failing, so an
+/// APK whose layout declares an ImageView still runs; the visual is a plain
+/// box. This is a documented visual subset, not a crash surface.
+/// </summary>
+public sealed class AndroidImageViewNode : AndroidViewNode
+{
+    public AndroidImageViewNode(int resourceId) : base(resourceId) { }
+    internal override AndroidSize Measure(AndroidMeasureSpec width, AndroidMeasureSpec height, AndroidUiContext context)
+    {
+        if (Visibility == AndroidViewVisibility.Gone) return MeasuredSize = default;
+        float desiredWidth = 24 * context.Density, desiredHeight = 24 * context.Density;
+        return MeasuredSize = new(
+            LayoutWidth.Kind == AndroidLayoutSize.MatchParent || width.Mode == AndroidMeasureMode.Exactly ? width.Size : Math.Min(width.Size, desiredWidth),
+            LayoutHeight.Kind == AndroidLayoutSize.MatchParent || height.Mode == AndroidMeasureMode.Exactly ? height.Size : Math.Min(height.Size, desiredHeight));
+    }
 }
 
 public readonly record struct AndroidTextMetrics(float Width, float Height, float Baseline);

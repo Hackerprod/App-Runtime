@@ -11,7 +11,7 @@ namespace AndroidRuntime.Core.ApiLayer;
 
 public sealed record AndroidPeerLimits
 {
-    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024, int maxBoxed = 1024, int maxMapEntries = 1024, int maxMapViews = 256, int maxLazies = 256, int maxArrayDeques = 256, int maxLinkedHashSets = 256, int maxLinkedHashMaps = 256)
+    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024, int maxBoxed = 1024, int maxMapEntries = 1024, int maxMapViews = 256, int maxLazies = 256, int maxArrayDeques = 256, int maxLinkedHashSets = 256, int maxLinkedHashMaps = 256, int maxConcurrentHashMaps = 256)
     {
         StringBuilders = maxStringBuilders;
         Bundles = maxBundles;
@@ -41,6 +41,7 @@ public sealed record AndroidPeerLimits
         ArrayDeques = maxArrayDeques;
         LinkedHashSets = maxLinkedHashSets;
         LinkedHashMaps = maxLinkedHashMaps;
+        ConcurrentHashMaps = maxConcurrentHashMaps;
         Validate();
     }
 
@@ -73,10 +74,11 @@ public sealed record AndroidPeerLimits
     public int ArrayDeques { get; }
     public int LinkedHashSets { get; }
     public int LinkedHashMaps { get; }
+    public int ConcurrentHashMaps { get; }
 
     public void Validate()
     {
-        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0 || Boxed <= 0 || MapEntries <= 0 || MapViews <= 0 || Lazies <= 0 || ArrayDeques <= 0 || LinkedHashSets <= 0 || LinkedHashMaps <= 0)
+        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0 || Boxed <= 0 || MapEntries <= 0 || MapViews <= 0 || Lazies <= 0 || ArrayDeques <= 0 || LinkedHashSets <= 0 || LinkedHashMaps <= 0 || ConcurrentHashMaps <= 0)
             throw new ArgumentOutOfRangeException(nameof(AndroidPeerLimits), "Peer limits must be positive.");
     }
 }
@@ -143,11 +145,13 @@ public sealed class AndroidFrameworkState : IDisposable
         TargetSdkVersion = targetSdkVersion;
         Power = power ?? new UnavailableAndroidPower();
         Ui = resources is null ? null : new AndroidUiSession(resources, uiLimits ?? new AndroidUiLimits(), PeerLimits.Views);
+        Resources = resources;
         StringBuilders = new AndroidPeerStore<StringBuilder>("StringBuilder", PeerLimits.StringBuilders);
         Bundles = new AndroidPeerStore<BundlePeer>("Bundle", PeerLimits.Bundles);
         Intents = new AndroidPeerStore<IntentPeer>("Intent", PeerLimits.Intents);
         Toasts = new AndroidPeerStore<ToastPeer>("Toast", PeerLimits.Toasts, peer => peer.Notification.Dispose());
         AtomicReferences = new AndroidPeerStore<AtomicReferencePeer>("AtomicReference", PeerLimits.AtomicReferences);
+        AtomicBooleans = new AndroidPeerStore<AtomicBooleanPeer>("AtomicBoolean", PeerLimits.AtomicIntegers);
         WeakHashMaps = new AndroidPeerStore<WeakHashMapPeer>("WeakHashMap", PeerLimits.WeakHashMaps);
         HashMaps = new AndroidPeerStore<HashMapPeer>("HashMap", PeerLimits.HashMaps);
         ArrayLists = new AndroidPeerStore<ListPeer>("ArrayList", PeerLimits.ArrayLists);
@@ -170,8 +174,10 @@ public sealed class AndroidFrameworkState : IDisposable
         ArrayDeques = new AndroidPeerStore<ListPeer>("ArrayDeque", PeerLimits.ArrayDeques);
         LinkedHashSets = new AndroidPeerStore<OrderedSetPeer>("LinkedHashSet", PeerLimits.LinkedHashSets);
         LinkedHashMaps = new AndroidPeerStore<LinkedHashMapPeer>("LinkedHashMap", PeerLimits.LinkedHashMaps);
+        ConcurrentHashMaps = new AndroidPeerStore<ConcurrentHashMapPeer>("ConcurrentHashMap", PeerLimits.ConcurrentHashMaps);
         ApplicationContext = new DexObject("Landroid/app/Application;");
         LauncherIntent = new DexObject("Landroid/content/Intent;");
+        TypedArrayObject = new DexObject("Landroid/content/res/TypedArray;");
         Intents.Add(LauncherIntent, new IntentPeer { Action = "android.intent.action.MAIN" });
         InitializeTimeUnitConstants();
     }
@@ -182,6 +188,7 @@ public sealed class AndroidFrameworkState : IDisposable
     public int MinimumLogPriority { get; }
     public DexObject ApplicationContext { get; }
     public DexObject LauncherIntent { get; }
+    public DexObject TypedArrayObject { get; }
     public AndroidToastLimits ToastLimits { get; }
     public AndroidPeerLimits PeerLimits { get; }
     public IAndroidClock Clock { get; }
@@ -206,6 +213,7 @@ public sealed class AndroidFrameworkState : IDisposable
     internal AndroidPeerStore<IntentPeer> Intents { get; }
     internal AndroidPeerStore<ToastPeer> Toasts { get; }
     internal AndroidPeerStore<AtomicReferencePeer> AtomicReferences { get; }
+    internal AndroidPeerStore<AtomicBooleanPeer> AtomicBooleans { get; }
     internal AndroidPeerStore<WeakHashMapPeer> WeakHashMaps { get; }
     internal AndroidPeerStore<HashMapPeer> HashMaps { get; }
     internal AndroidPeerStore<ListPeer> ArrayLists { get; }
@@ -228,6 +236,7 @@ public sealed class AndroidFrameworkState : IDisposable
     internal AndroidPeerStore<ListPeer> ArrayDeques { get; }
     internal AndroidPeerStore<OrderedSetPeer> LinkedHashSets { get; }
     internal AndroidPeerStore<LinkedHashMapPeer> LinkedHashMaps { get; }
+    internal AndroidPeerStore<ConcurrentHashMapPeer> ConcurrentHashMaps { get; }
     /// <summary>The session's GIL: shared by the interpreter and every binding that
     /// must release it around real blocking (sleep/join/monitor-enter/class-init
     /// wait). AndroidAppRuntime replaces this with the execution lane's GIL.</summary>
@@ -260,6 +269,87 @@ public sealed class AndroidFrameworkState : IDisposable
     internal object WorkerRunnablesGate { get; } = new();
     internal ActivityWindowPeers WindowPeers { get; }
     internal DexObject? Activity { get; private set; }
+    /// <summary>The stable per-session Resources facade object returned by
+    /// Context.getResources(). Reads resolve through the APK resource resolver;
+    /// the facade object itself is stateless.</summary>
+    internal DexObject ResourcesObject { get; } = new("Landroid/content/res/Resources;");
+    /// <summary>The stable en-US Locale singleton returned by LocaleList/get().
+    /// Real Android has per-locale objects; one honest neutral locale is enough
+    /// for this runtime (no localization pipeline).</summary>
+    internal DexObject LocaleObject { get; } = new("Ljava/util/Locale;");
+    /// <summary>Stable Window facade returned by Activity.getWindow(); content
+    /// plumbing lives in the UI session, the object is stateless.</summary>
+    internal DexObject WindowObject { get; } = new("Landroid/view/Window;");
+    /// <summary>The guest Window.Callback installed via Window.setCallback
+    /// (appcompat registers its delegate); null until set. Guarded by the
+    /// execution lane (single-threaded guest access).</summary>
+    internal DexObject? WindowCallback { get; set; }
+    /// <summary>Stable DecorView facade returned by Window.getDecorView().</summary>
+    internal DexObject DecorViewObject { get; } = new("Landroid/widget/FrameLayout;");
+    /// <summary>Stable WindowManager.LayoutParams facade returned by
+    /// Window.getAttributes(); mutable fields default to 0 via iget.</summary>
+    internal DexObject WindowAttributesObject { get; } = new("Landroid/view/WindowManager$LayoutParams;");
+    /// <summary>The stable ThreadLocalRandom facade object returned by
+    /// ThreadLocalRandom.current(); random draws use a shared lock-protected
+    /// CLR Random (single execution lane, so contention is negligible).</summary>
+    internal DexObject ThreadLocalRandomObject { get; } = new("Ljava/util/concurrent/ThreadLocalRandom;");
+    internal Random ThreadLocalRandomSource { get; } = new();
+    /// <summary>Per-session SharedPreferences stores, keyed by preference-file
+    /// name (real Android persists to disk; the runtime keeps an in-memory
+    /// session store so getSharedPreferences flows work end-to-end).</summary>
+    internal Dictionary<string, Dictionary<string, object>> SharedPreferences { get; } = new(StringComparer.Ordinal);
+    /// <summary>Guest SharedPreferences facade objects per preference-file name
+    /// (stable identity per file, same reasoning as other facades).</summary>
+    internal Dictionary<string, DexObject> SharedPreferenceObjects { get; } = new(StringComparer.Ordinal);
+    internal DexObject EnsureSharedPreferences(string name)
+    {
+        lock (_classCacheGate)
+        {
+            if (!SharedPreferenceObjects.TryGetValue(name, out var existing))
+            {
+                existing = new DexObject("Landroid/content/SharedPreferences;");
+                SharedPreferenceObjects[name] = existing;
+                SharedPreferences.TryAdd(name, new Dictionary<string, object>(StringComparer.Ordinal));
+            }
+            return existing;
+        }
+    }
+    /// <summary>Stable OnBackInvokedDispatcher facade; back dispatch is handled
+    /// host-side, so registration is a no-op.</summary>
+    internal DexObject OnBackInvokedDispatcherObject { get; } = new("Landroid/window/OnBackInvokedDispatcher;");
+    /// <summary>Stable legacy FragmentManager facade returned by
+    /// Activity.getFragmentManager(); findFragmentByTag answers null so
+    /// lifecycle-reporting probes proceed.</summary>
+    internal DexObject FragmentManagerObject { get; } = new("Landroid/app/FragmentManager;");
+    /// <summary>Stable no-op FragmentTransaction facade (ReportFragment injection).</summary>
+    internal DexObject FragmentTransactionObject { get; } = new("Landroid/app/FragmentTransaction;");
+    /// <summary>Canonical ComponentName per activity descriptor (stable identity
+    /// per class, same reasoning as the Class cache).</summary>
+    private readonly Dictionary<string, DexObject> _componentNames = new(StringComparer.Ordinal);
+    internal DexObject EnsureComponentName(string activityDescriptor)
+    {
+        lock (_classCacheGate)
+        {
+            if (!_componentNames.TryGetValue(activityDescriptor, out var existing))
+            {
+                existing = new DexObject("Landroid/content/ComponentName;");
+                existing.InstanceFields["_packageName"] = PackageName;
+                existing.InstanceFields["_className"] = "L" == activityDescriptor[..1]
+                    ? activityDescriptor.Substring(1, activityDescriptor.Length - 2).Replace('/', '.')
+                    : activityDescriptor;
+                _componentNames[activityDescriptor] = existing;
+            }
+            return existing;
+        }
+    }
+    /// <summary>The per-session APK resource resolver (null when no APK resources
+    /// were attached, e.g. standalone test sessions).</summary>
+    internal AndroidResourceResolver? Resources { get; }
+    /// <summary>The stable per-session LayoutInflater facade object returned by
+    /// LayoutInflater.from(Context) (real Android caches one per Context; the
+    /// facade itself is stateless here because inflation state lives in the UI
+    /// session).</summary>
+    internal DexObject LayoutInflaterObject { get; } = new("Landroid/view/LayoutInflater;");
     public void AttachActivity(DexObject activity)
     {
         ArgumentNullException.ThrowIfNull(activity);
@@ -413,6 +503,36 @@ public sealed class AndroidFrameworkState : IDisposable
             };
             if (primitive is not null) return EnsureClassObject(primitive);
         }
+        // android.os.Build fields: the host is not an Android device, so identity
+        // fields report a bounded, honest neutral value (not fabricated hardware),
+        // and SDK_INT reports the session's targetSdkVersion so SDK-gated code
+        // follows the app's own declared target. Real apps commonly call
+        // Build.MANUFACTURER.toLowerCase() etc. for vendor checks; a string (never
+        // null) keeps those paths alive without lying about the device.
+        if (classDescriptor == "Landroid/os/Build$VERSION;")
+        {
+            if (fieldName == "SDK_INT") return TargetSdkVersion;
+        }
+        if (classDescriptor == "Landroid/os/Build;")
+        {
+            return fieldName switch
+            {
+                "MANUFACTURER" => "unknown",
+                "BRAND" => "unknown",
+                "MODEL" => "AndroidRuntime",
+                "DEVICE" => "generic",
+                "PRODUCT" => "generic",
+                "BOARD" => "generic",
+                "HARDWARE" => "generic",
+                "FINGERPRINT" => "generic",
+                "TAGS" => "release-keys",
+                "TYPE" => "user",
+                "USER" => "android-build",
+                "HOST" => "android-build",
+                "SUPPORTED_ABIS" => null,
+                _ => null
+            };
+        }
         return null;
     }
 
@@ -500,6 +620,7 @@ public sealed class AndroidFrameworkState : IDisposable
         Bundles.Clear();
         StringBuilders.Clear();
         AtomicReferences.Clear();
+        AtomicBooleans.Clear();
         WeakHashMaps.Clear();
         HashMaps.Clear();
         ArrayLists.Clear();
@@ -522,6 +643,7 @@ public sealed class AndroidFrameworkState : IDisposable
         ArrayDeques.Clear();
         LinkedHashSets.Clear();
         LinkedHashMaps.Clear();
+        ConcurrentHashMaps.Clear();
         Activity = null;
         SystemServices?.Dispose();
     }
@@ -785,6 +907,13 @@ internal sealed class AtomicIntegerPeer
     internal int Value { get; set; }
 }
 
+/// <summary>Mutable per-instance bool state for a guest AtomicBoolean. Same
+/// single-serial-lane reasoning as AtomicIntegerPeer.</summary>
+internal sealed class AtomicBooleanPeer
+{
+    internal bool Value { get; set; }
+}
+
 /// <summary>
 /// Per-instance state for a guest java.lang.Thread: name, cooperative interrupt
 /// flag/signals, the underlying real CLR thread, and the Runnable target if any.
@@ -965,6 +1094,23 @@ internal sealed class LinkedHashMapPeer
 }
 
 /// <summary>
+/// Storage for a guest java.util.concurrent.ConcurrentHashMap. Real
+/// ConcurrentHashMap's internal lock-striping/CAS machinery has NO observable
+/// behavioral difference from a plain unsynchronized dictionary under this
+/// runtime's GIL (only one thread executes guest bytecode at a time) — same
+/// reasoning as AtomicReference/Collections.synchronizedMap/kotlin.Lazy.
+/// Unlike HashMap, real ConcurrentHashMap does NOT permit null keys OR values
+/// (NPE — verified against OpenJDK source); the bindings reject nulls before
+/// touching this store, so no null-key sentinel is needed.
+/// </summary>
+internal sealed class ConcurrentHashMapPeer
+{
+    internal Dictionary<object, object?> Entries { get; } = new();
+    internal int Count => Entries.Count;
+    internal void Clear() => Entries.Clear();
+}
+
+/// <summary>
 /// Completion/state for a guest java.util.concurrent.Future. State transitions:
 /// 0 pending, 1 running, 2 done, 3 cancelled. Completion is a ManualResetEvent so
 /// Future.get() genuinely blocks (releasing the GIL) like Thread.join does.
@@ -1050,6 +1196,10 @@ internal sealed class LooperPeer
 internal sealed class HandlerPeer
 {
     internal required LooperPeer Looper { get; init; }
+    /// <summary>The guest Looper object this handler bound to (for
+    /// Handler.getLooper()); null when the handler was created on a looper-less
+    /// path (not possible — constructors always bind one).</summary>
+    internal DexObject? LooperObject { get; set; }
     internal object Gate { get; } = new();
     internal HashSet<DexObject> Pending { get; } = new(ReferenceEqualityComparer.Instance);
     internal Dictionary<DexObject, CancellationTokenSource> Timers { get; } = new(ReferenceEqualityComparer.Instance);
@@ -1089,9 +1239,15 @@ internal static class AndroidFrameworkHierarchy
         ["Landroid/os/PowerManager;"] = "Ljava/lang/Object;",
         ["Landroid/view/View;"] = "Ljava/lang/Object;",
         ["Landroid/view/ViewGroup;"] = "Landroid/view/View;",
+        ["Landroid/widget/FrameLayout;"] = "Landroid/view/ViewGroup;",
+        ["Landroidx/appcompat/widget/ContentFrameLayout;"] = "Landroid/widget/FrameLayout;",
+        ["Landroid/view/LayoutInflater;"] = "Ljava/lang/Object;",
+        ["Ljava/util/Random;"] = "Ljava/lang/Object;",
+        ["Ljava/util/concurrent/ThreadLocalRandom;"] = "Ljava/util/Random;",
         ["Landroid/widget/LinearLayout;"] = "Landroid/view/ViewGroup;",
         ["Landroid/widget/TextView;"] = "Landroid/view/View;",
         ["Landroid/widget/Button;"] = "Landroid/widget/TextView;",
+        ["Landroid/widget/ImageView;"] = "Landroid/view/View;",
         ["Landroid/view/View$OnClickListener;"] = "Ljava/lang/Object;",
         ["Ljava/lang/Throwable;"] = "Ljava/lang/Object;",
         ["Ljava/lang/Error;"] = "Ljava/lang/Throwable;",
@@ -1135,12 +1291,22 @@ internal static class AndroidFrameworkHierarchy
         ["Ljava/util/ArrayList;"] = ["Ljava/util/List;"],
         ["Ljava/util/HashMap;"] = ["Ljava/util/Map;"],
         ["Ljava/util/WeakHashMap;"] = ["Ljava/util/Map;"],
+        ["Ljava/util/LinkedHashMap;"] = ["Ljava/util/Map;"],
+        ["Ljava/util/concurrent/ConcurrentHashMap;"] = ["Ljava/util/Map;"],
+        ["Ljava/util/LinkedHashSet;"] = ["Ljava/util/Set;"],
+        ["Ljava/util/HashSet;"] = ["Ljava/util/Set;"],
+        // Real Activity implements Window.Callback (the window callback default).
+        ["Landroid/app/Activity;"] = ["Landroid/view/Window$Callback;"],
         ["Ljava/util/Set;"] = ["Ljava/util/Collection;"],
         ["Ljava/util/List;"] = ["Ljava/util/Collection;"],
         ["Ljava/util/Collection;"] = ["Ljava/lang/Iterable;"],
         ["Ljava/util/concurrent/ThreadPoolExecutor;"] = ["Ljava/util/concurrent/ExecutorService;"],
         ["Ljava/util/concurrent/ExecutorService;"] = ["Ljava/util/concurrent/Executor;"],
-        ["Ljava/util/concurrent/FutureTask;"] = ["Ljava/util/concurrent/Future;", "Ljava/lang/Runnable;"]
+        ["Ljava/util/concurrent/FutureTask;"] = ["Ljava/util/concurrent/Future;", "Ljava/lang/Runnable;"],
+        // android.window back-navigation interfaces: guest anonymous classes
+        // declare these framework interfaces; the interface-extends-interface
+        // edges let check-cast/instance-of prove assignability through them.
+        ["Landroid/window/OnBackAnimationCallback;"] = ["Landroid/window/OnBackInvokedCallback;"]
     };
 
     internal static IEnumerable<string> InterfacesOf(string descriptor) =>

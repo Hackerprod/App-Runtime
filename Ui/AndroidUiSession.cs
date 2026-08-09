@@ -68,13 +68,60 @@ internal sealed class AndroidUiSession : IDisposable
         _scene = scene;
     }
 
+    /// <summary>
+    /// Inflates a layout resource into a DETACHED view tree (real
+    /// LayoutInflater.inflate(resId, null, false) semantics): every node gets a
+    /// registered guest View so findViewById/setText/etc. work on the returned
+    /// root, but the tree is NOT installed as the content view and participates
+    /// in no scene. Registration is additive (does not disturb an existing
+    /// content view); a later SetContentView rebuilds the maps from the content
+    /// tree, which real apps only do for window content.
+    /// </summary>
+    internal DexObject Inflate(int layoutResourceId)
+    {
+        RequireLane();
+        AndroidXmlDocument document = _resources.LoadLayout(unchecked((uint)layoutResourceId));
+        var inflater = new AndroidLayoutInflater(_resources, _limits);
+        AndroidViewNode root = inflater.Inflate(document);
+        if (inflater.CreatedViewCount > _peerLimit) throw new AndroidPeerQuotaExceededException("View", _peerLimit);
+        var pending = new List<(DexObject Guest, AndroidViewNode Node)>();
+        Walk(root);
+        void Walk(AndroidViewNode node)
+        {
+            var guest = new DexObject(DescriptorFor(node));
+            // Framework-owned view state the guest <init> would normally set: the
+            // runtime inflates scaffold views natively (no guest constructor
+            // runs), so eagerly initialize fields guest methods read.
+            if (node.GuestDescriptor == "Landroidx/appcompat/widget/ContentFrameLayout;")
+                guest.InstanceFields["Landroidx/appcompat/widget/ContentFrameLayout;->mDecorPadding:Landroid/graphics/Rect;"] = new DexObject("Landroid/graphics/Rect;");
+            pending.Add((guest, node));
+            foreach (AndroidViewNode child in node.Children) Walk(child);
+        }
+        foreach (var (guest, node) in pending)
+        {
+            _guestToNode.Add(guest, node);
+            _nodeToGuest.Add(node, guest);
+            _listeners.Add(node, null);
+        }
+        return pending[0].Guest;
+    }
+
     internal DexObject? FindViewById(int id, DexObject? receiver = null)
     {
         RequireLane();
-        if (id == 0 || _scene is null) return null;
-        AndroidViewNode? start = receiver is null ? _scene.Root : Node(receiver);
-        AndroidViewNode? found = start.FindById(id);
-        return found is null ? null : _nodeToGuest[found];
+        if (id == 0) return null;
+        // With a receiver, search from that view's node (works for trees
+        // inflated via LayoutInflater.inflate even before any content view /
+        // scene exists). Without a receiver, the content-view scene must exist.
+        if (receiver is not null)
+        {
+            AndroidViewNode start = Node(receiver);
+            AndroidViewNode? found = start.FindById(id);
+            return found is null ? null : _nodeToGuest[found];
+        }
+        if (_scene is null) return null;
+        AndroidViewNode? contentFound = _scene.Root.FindById(id);
+        return contentFound is null ? null : _nodeToGuest[contentFound];
     }
 
     internal int GetId(DexObject guest) { RequireLane(); return Node(guest).ResourceId; }
@@ -136,7 +183,7 @@ internal sealed class AndroidUiSession : IDisposable
 
     private AndroidViewNode Node(DexObject guest) => _guestToNode.TryGetValue(guest, out AndroidViewNode? node) ? node : throw new InvalidOperationException("View receiver does not belong to this session.");
     private AndroidTextViewNode TextNode(DexObject guest) => Node(guest) as AndroidTextViewNode ?? throw new InvalidOperationException("View is not a TextView.");
-    private static string DescriptorFor(AndroidViewNode node) => node switch { AndroidButtonNode => "Landroid/widget/Button;", AndroidTextViewNode => "Landroid/widget/TextView;", AndroidLinearLayoutNode => "Landroid/widget/LinearLayout;", _ => "Landroid/view/View;" };
+    private static string DescriptorFor(AndroidViewNode node) => node.GuestDescriptor ?? node switch { AndroidButtonNode => "Landroid/widget/Button;", AndroidTextViewNode => "Landroid/widget/TextView;", AndroidImageViewNode => "Landroid/widget/ImageView;", AndroidLinearLayoutNode => "Landroid/widget/LinearLayout;", _ => "Landroid/view/View;" };
 
     public void Dispose()
     {

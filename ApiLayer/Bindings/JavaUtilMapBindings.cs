@@ -25,6 +25,7 @@ internal static class JavaUtilMapBindings
 {
     private const string HashMap = "Ljava/util/HashMap;";
     private const string LinkedHashMap = "Ljava/util/LinkedHashMap;";
+    private const string ConcurrentHashMap = "Ljava/util/concurrent/ConcurrentHashMap;";
     private const string WeakHashMap = "Ljava/util/WeakHashMap;";
     private const string MapClass = "Ljava/util/Map;";
     private const string EntryClass = "Ljava/util/Map$Entry;";
@@ -36,6 +37,7 @@ internal static class JavaUtilMapBindings
         // ---- Map views (snapshot Set/Collection per backing map type) ----
         RegisterFor(builder, state, HashMap, map: m => m);
         RegisterFor(builder, state, LinkedHashMap, map: m => m);
+        RegisterFor(builder, state, ConcurrentHashMap, map: m => m);
         RegisterFor(builder, state, WeakHashMap, map: m => m);
         RegisterFor(builder, state, MapClass, map: m => m);
 
@@ -124,6 +126,8 @@ internal static class JavaUtilMapBindings
             return state.WeakHashMaps.Get(dex).Entries.Select(pair => new KeyValuePair<object?, object?>(pair.Key, pair.Value));
         if (dex.TypeDescriptor == LinkedHashMap)
             return state.LinkedHashMaps.Get(dex).Entries();
+        if (dex.TypeDescriptor == ConcurrentHashMap)
+            return state.ConcurrentHashMaps.Get(dex).Entries.Select(pair => new KeyValuePair<object?, object?>(pair.Key, pair.Value));
         return state.HashMaps.Get(dex).Entries();
     }
 

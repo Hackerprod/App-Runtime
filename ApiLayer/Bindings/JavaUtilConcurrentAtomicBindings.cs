@@ -12,6 +12,7 @@ internal static class JavaUtilConcurrentAtomicBindings
     {
         RegisterAtomicReference(builder, state);
         RegisterAtomicInteger(builder, state);
+        RegisterAtomicBoolean(builder, state);
     }
 
     private static void RegisterAtomicReference(AndroidApiRegistryBuilder builder, AndroidFrameworkState state)
@@ -60,6 +61,30 @@ internal static class JavaUtilConcurrentAtomicBindings
             if (peer.Value != expected) return 0;
             peer.Value = update;
             return 1;
+        });
+    }
+
+    private static void RegisterAtomicBoolean(AndroidApiRegistryBuilder builder, AndroidFrameworkState state)
+    {
+        builder.Register(Api("Ljava/util/concurrent/atomic/AtomicBoolean;", "<init>", "()V"), (_, args) => { state.AtomicBooleans.Add(Receiver(args), new AtomicBooleanPeer()); return null!; });
+        builder.Register(Api("Ljava/util/concurrent/atomic/AtomicBoolean;", "<init>", "(Z)V"), (_, args) => { state.AtomicBooleans.Add(Receiver(args), new AtomicBooleanPeer { Value = RequireInt(args[1]) != 0 }); return null!; });
+        builder.Register(Api("Ljava/util/concurrent/atomic/AtomicBoolean;", "get", "()Z"), (_, args) => state.AtomicBooleans.Get(Receiver(args)).Value ? 1 : 0);
+        builder.Register(Api("Ljava/util/concurrent/atomic/AtomicBoolean;", "set", "(Z)V"), (_, args) => { state.AtomicBooleans.Get(Receiver(args)).Value = RequireInt(args[1]) != 0; return null!; });
+        builder.Register(Api("Ljava/util/concurrent/atomic/AtomicBoolean;", "compareAndSet", "(ZZ)Z"), (_, args) =>
+        {
+            var peer = state.AtomicBooleans.Get(Receiver(args));
+            bool expected = RequireInt(args[1]) != 0;
+            bool update = RequireInt(args[2]) != 0;
+            if (peer.Value != expected) return 0;
+            peer.Value = update;
+            return 1;
+        });
+        builder.Register(Api("Ljava/util/concurrent/atomic/AtomicBoolean;", "getAndSet", "(Z)Z"), (_, args) =>
+        {
+            var peer = state.AtomicBooleans.Get(Receiver(args));
+            bool old = peer.Value;
+            peer.Value = RequireInt(args[1]) != 0;
+            return old ? 1 : 0;
         });
     }
 

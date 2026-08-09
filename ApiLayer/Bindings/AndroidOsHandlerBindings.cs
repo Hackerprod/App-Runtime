@@ -35,14 +35,15 @@ internal static class AndroidOsHandlerBindings
         {
             var looper = MyLooper(state)
                 ?? throw new GuestExceptionCarrier(GuestThrowableMetadata.Create("Ljava/lang/RuntimeException;", "Can't create handler inside thread that has not called Looper.prepare()"));
-            state.Handlers.Add(Receiver(args), new HandlerPeer { Looper = state.Loopers.Get(looper) });
+            state.Handlers.Add(Receiver(args), new HandlerPeer { Looper = state.Loopers.Get(looper), LooperObject = looper });
             return null!;
         });
         builder.Register(Api(HandlerClass, "<init>", "(Landroid/os/Looper;)V"), (_, args) =>
         {
-            state.Handlers.Add(Receiver(args), new HandlerPeer { Looper = state.Loopers.Get(RequireDex(args[1])) });
+            state.Handlers.Add(Receiver(args), new HandlerPeer { Looper = state.Loopers.Get(RequireDex(args[1])), LooperObject = RequireDex(args[1]) });
             return null!;
         });
+        builder.Register(Api(HandlerClass, "getLooper", "()Landroid/os/Looper;"), (_, args) => state.Handlers.Get(Receiver(args)).LooperObject ?? null!);
         builder.Register(Api(HandlerClass, "post", "(Ljava/lang/Runnable;)Z"), (_, args) => Post(state, state.Handlers.Get(Receiver(args)), RequireDex(args[1]), delayMillis: 0) ? 1 : 0);
         builder.Register(Api(HandlerClass, "postDelayed", "(Ljava/lang/Runnable;J)Z"), (_, args) => Post(state, state.Handlers.Get(Receiver(args)), RequireDex(args[1]), RequireLong(args[2])) ? 1 : 0);
         builder.Register(Api(HandlerClass, "removeCallbacks", "(Ljava/lang/Runnable;)V"), (_, args) => { RemoveCallbacks(state.Handlers.Get(Receiver(args)), RequireDex(args[1])); return null!; });
@@ -164,6 +165,21 @@ internal static class AndroidOsHandlerBindings
             if (state.Lane is not null) return state.Lane.TryPost(wrapper);
         }
         return looper.Queue?.Post(wrapper) ?? false;
+    }
+
+    /// <summary>Runs a guest Runnable on the main Looper (Activity.runOnUiThread
+    /// when called from a background guest thread). No callback tracking: the
+    /// runnable runs exactly once, later.</summary>
+    internal static bool PostPublic(AndroidFrameworkState state, DexObject runnable)
+    {
+        var looper = state.MainLooperPeer
+            ?? state.Loopers.Get(state.EnsureMainLooper());
+        var wrapper = new Action(() =>
+        {
+            try { state.Interpreter?.InvokeInstanceExact(runnable, "run", "()V"); }
+            catch (Exception error) { looper.TerminalException = error; }
+        });
+        return Dispatch(state, looper, wrapper);
     }
 
     private static void RemoveCallbacks(HandlerPeer handler, DexObject runnable)

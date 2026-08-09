@@ -57,7 +57,7 @@ internal static class JavaUtilLinkedHashSetBindings
         builder.Register(Api(LinkedHashSet, "iterator", "()Ljava/util/Iterator;"), (_, args) => CreateIterator(state, state.LinkedHashSets.Get(Receiver(args)).Elements));
     }
 
-    private static IEnumerable<object?> CollectionItems(AndroidFrameworkState state, DexObject collection)
+    internal static IEnumerable<object?> CollectionItems(AndroidFrameworkState state, DexObject collection)
     {
         if (state.ArrayLists.TryGet(collection, out var list)) return list.Elements;
         if (state.ArrayDeques.TryGet(collection, out var deque)) return deque.Elements;

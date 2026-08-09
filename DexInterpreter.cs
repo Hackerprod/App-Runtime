@@ -674,14 +674,15 @@ namespace AndroidRuntime.Core.Dex
                             _apiSession.RecordGuestThrow(method.Method.ToString(), pc, throwable.TypeDescriptor);
                             throw new GuestExceptionCarrier(throwable) { TraceRecorded = true };
 
-                        case 0x20: // instance-of vA, vB, type@CCCC (22c) - heurística simplificada
+                        case 0x20: // instance-of vA, vB, type@CCCC (22c)
                             {
                                 string wanted = dex.TypeDescriptors[insns[pc + 1]];
                                 object obj = regs[n2];
                                 bool isInst = obj != null && (
                                     wanted == "Ljava/lang/Object;" ||
-                                    (obj is string && wanted == "Ljava/lang/String;") ||
-                                    (obj is DexObject dobj && dobj.TypeDescriptor == wanted));
+                                    (obj is string && IsTypeAssignable("Ljava/lang/String;", wanted)) ||
+                                    (obj is DexObject dobj && IsTypeAssignable(dobj.TypeDescriptor, wanted)) ||
+                                    (obj is DexArray array && IsTypeAssignable(array.ArrayDescriptor, wanted)));
                                 regs[n1] = isInst ? 1 : 0;
                                 pc += 2;
                             }
@@ -878,7 +879,8 @@ namespace AndroidRuntime.Core.Dex
                                 if (regs[n2] == null || regs[n2] is int nullIget && nullIget == 0) throw new GuestExceptionCarrier(GuestThrowableMetadata.Create("Ljava/lang/NullPointerException;"));
                                 if (obj == null) throw new InvalidOperationException("iget sobre un registro que no es una instancia: " + fref);
                                 object val;
-                                obj.InstanceFields.TryGetValue(FieldKey(fref), out val);
+                                if (!obj.InstanceFields.TryGetValue(FieldKey(fref), out val))
+                                    TryGetSuperclassField(obj, fref, out val);
                                 regs[n1] = val ?? DefaultFieldValue(fref.Type);
                                 pc += 2;
                             }
@@ -889,7 +891,9 @@ namespace AndroidRuntime.Core.Dex
                                 var fref = dex.Fields[insns[pc + 1]];
                                 if (regs[n2] == null || regs[n2] is int nullIgetWide && nullIgetWide == 0) throw new GuestExceptionCarrier(GuestThrowableMetadata.Create("Ljava/lang/NullPointerException;"));
                                 var obj = regs[n2] as DexObject ?? throw new InvalidOperationException("iget-wide requires an instance: " + fref);
-                                ulong bits = obj.InstanceFields.TryGetValue(FieldKey(fref), out var val) && val is WideValue wide ? wide.Bits : 0UL;
+                                ulong bits = 0UL;
+                                if (obj.InstanceFields.TryGetValue(FieldKey(fref), out var val) && val is WideValue wide) bits = wide.Bits;
+                                else if (TryGetSuperclassField(obj, fref, out var superVal) && superVal is WideValue superWide) bits = superWide.Bits;
                                 SetWide(regs, n1, bits);
                                 pc += 2;
                             }
@@ -903,6 +907,16 @@ namespace AndroidRuntime.Core.Dex
                                 if (regs[n2] == null || regs[n2] is int nullIput && nullIput == 0) throw new GuestExceptionCarrier(GuestThrowableMetadata.Create("Ljava/lang/NullPointerException;"));
                                 if (obj == null) throw new InvalidOperationException("iput sobre un registro que no es una instancia: " + fref);
                                 obj.InstanceFields[FieldKey(fref)] = regs[n1];
+                                // Same logical slot under every superclass owner key: real
+                                // Java resolves instance fields to the DECLARING class, but
+                                // dex compiles iget/iput refs with the compile-time owner
+                                // (e.g. a Kotlin FunctionReferenceImpl lambda reads
+                                // subclass->receiver while the parent <init> writes
+                                // parent->receiver). Mirroring across the owner chain keeps
+                                // one slot per (name,type) regardless of which class the
+                                // bytecode names.
+                                foreach (string owner in SuperclassChainOf(fref.ClassDescriptor))
+                                    obj.InstanceFields[owner + "->" + fref.Name + ":" + fref.Type] = regs[n1];
                                 obj.InstanceFields[fref.Name] = regs[n1];
                                 pc += 2;
                             }
@@ -915,6 +929,8 @@ namespace AndroidRuntime.Core.Dex
                                 var obj = regs[n2] as DexObject ?? throw new InvalidOperationException("iput-wide requires an instance: " + fref);
                                 var wide = new WideValue(GetWide(regs, n1));
                                 obj.InstanceFields[FieldKey(fref)] = wide;
+                                foreach (string owner in SuperclassChainOf(fref.ClassDescriptor))
+                                    obj.InstanceFields[owner + "->" + fref.Name + ":" + fref.Type] = wide;
                                 if (fref.Type == "D") obj.InstanceFields[fref.Name] = BitConverter.Int64BitsToDouble(unchecked((long)wide.Bits));
                                 else obj.InstanceFields[fref.Name] = unchecked((long)wide.Bits);
                                 pc += 2;
@@ -1246,6 +1262,36 @@ namespace AndroidRuntime.Core.Dex
                 current = SuperclassOf(current);
             }
 
+            // Interface default methods: real Dalvik resolves invoke-interface through
+            // the interface's own default-method body when the receiver's class chain
+            // has no implementation (Java 8 default methods). Walk the requested
+            // interface's declared methods and super-interfaces, cycle-safe.
+            if (invokeKind == AndroidInvokeKind.Interface)
+            {
+                var interfaceVisited = new HashSet<string>(StringComparer.Ordinal);
+                var queue = new Queue<string>();
+                queue.Enqueue(methodRef.ClassDescriptor);
+                while (queue.Count > 0)
+                {
+                    string iface = queue.Dequeue();
+                    if (!interfaceVisited.Add(iface)) continue;
+                    var ifaceMethod = _dexSet.FindMethodExact(iface, methodRef.Name, descriptor);
+                    if (ifaceMethod?.Code != null)
+                    {
+                        if (ifaceMethod.IsStatic)
+                            throw new InvalidOperationException("invoke-interface targeted static method: " + ifaceMethod.Method);
+                        return Execute(ifaceMethod, args);
+                    }
+                    var ifaceCandidate = new AndroidApiMethodId(iface, methodRef.Name, descriptor);
+                    if (_api.Contains(ifaceCandidate))
+                        return InvokeApi(methodRef, args, invokeKind, caller, dexPc, requestedApi, ifaceCandidate);
+                    DexClass ifaceClass = _dexSet.FindClass(iface);
+                    if (ifaceClass is not null)
+                        foreach (string parent in ifaceClass.Interfaces)
+                            queue.Enqueue(parent);
+                }
+            }
+
             return InvokeApi(methodRef, args, invokeKind, caller, dexPc, requestedApi, requestedApi);
         }
 
@@ -1432,6 +1478,36 @@ namespace AndroidRuntime.Core.Dex
         private static string FieldKey(DexFieldRef field) => field.ClassDescriptor + "->" + field.Name + ":" + field.Type;
         private static object DefaultFieldValue(string descriptor) => descriptor.StartsWith("L", StringComparison.Ordinal) || descriptor.StartsWith("[", StringComparison.Ordinal) ? null : 0;
 
+        /// <summary>Superclass owner descriptors of a class, ending before the
+        /// object root: the chain a field ref could be compiled against. Real Java
+        /// resolves instance fields to the DECLARING class; dex compiles the ref
+        /// with the compile-time owner (a subclass lambda reading a parent field),
+        /// so reads must probe every possible owner key.</summary>
+        private IEnumerable<string> SuperclassChainOf(string descriptor)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            string current = SuperclassOf(descriptor);
+            while (current is not null && seen.Add(current) && current != "Ljava/lang/Object;")
+            {
+                yield return current;
+                current = SuperclassOf(current);
+            }
+        }
+
+        /// <summary>Reads an instance field that may be stored under a superclass
+        /// owner key (same logical slot, different bytecode owner). Returns true
+        /// and sets value when found under any owner in the chain.</summary>
+        private bool TryGetSuperclassField(DexObject obj, DexFieldRef fref, out object value)
+        {
+            foreach (string owner in SuperclassChainOf(fref.ClassDescriptor))
+            {
+                if (obj.InstanceFields.TryGetValue(owner + "->" + fref.Name + ":" + fref.Type, out value))
+                    return true;
+            }
+            value = null;
+            return false;
+        }
+
         private static ulong LongBinOp(int kind, ulong aBits, ulong bBits)
         {
             long a = unchecked((long)aBits), b = unchecked((long)bBits);
@@ -1467,6 +1543,7 @@ namespace AndroidRuntime.Core.Dex
 
         private string SuperclassOf(string descriptor)
         {
+            if (descriptor.StartsWith("[", StringComparison.Ordinal)) return "Ljava/lang/Object;";
             return _dexSet.FindClass(descriptor)?.SuperclassDescriptor ?? AndroidFrameworkHierarchy.ParentOf(descriptor);
         }
 
@@ -1555,9 +1632,19 @@ namespace AndroidRuntime.Core.Dex
             return AndroidFrameworkHierarchy.IsAssignable(actual, expected, SuperclassOf, InterfacesOf);
         }
 
+        private static string DescribeRegister(object value) => value switch
+        {
+            null => "null",
+            DexObject obj => obj.TypeDescriptor,
+            DexArray array => array.ArrayDescriptor,
+            string => "string",
+            _ => value.GetType().Name
+        };
+
         private static string DynamicDescriptor(object receiver)
         {
             if (receiver is DexObject guest) return guest.TypeDescriptor;
+            if (receiver is DexArray array) return array.ArrayDescriptor;
             if (receiver is string) return "Ljava/lang/String;";
             throw new InvalidOperationException("Unsupported invoke receiver type: " + receiver.GetType().Name);
         }

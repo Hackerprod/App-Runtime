@@ -161,7 +161,60 @@ internal static class JavaLangBindings
                 array.Set(index, state.EnsureClassObject(interfaces[index]));
             return array;
         });
+        // Class.getDeclaredMethod(name, parameterTypes): bounded reflection —
+        // returns a Method object for a guest-declared method matching the name
+        // and arity, or throws NoSuchMethodException (fail closed). Framework and
+        // API-bound types have no guest methods and thus always throw here.
+        builder.Register(Api("Ljava/lang/Class;", "getDeclaredMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"), (_, args) =>
+        {
+            string represented = state.ClassPeerOf(Receiver(args)).RepresentedDescriptor;
+            string name = RequireString(args[1]);
+            int parameterCount = args[2] is DexArray types ? types.Length : 0;
+            var interpreter = state.Interpreter ?? throw new InvalidOperationException("getDeclaredMethod requires an attached interpreter.");
+            foreach (var method in interpreter.DeclaredMethodsOf(represented))
+            {
+                if (method.Method.Name != name) continue;
+                if (method.Method.Proto.ParameterTypes.Count != parameterCount) continue;
+                var methodObject = new DexObject("Ljava/lang/reflect/Method;");
+                state.Methods.Add(methodObject, new MethodPeer(represented, name, method.Method.Proto.Descriptor()));
+                return methodObject;
+            }
+            throw new GuestExceptionCarrier(GuestThrowableMetadata.Create("Ljava/lang/NoSuchMethodException;", name));
+        });
+        // Class.getMethod(name, parameterTypes): like getDeclaredMethod but
+        // searches the superclass chain too (public methods incl. inherited).
+        builder.Register(Api("Ljava/lang/Class;", "getMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"), (_, args) =>
+        {
+            string represented = state.ClassPeerOf(Receiver(args)).RepresentedDescriptor;
+            string name = RequireString(args[1]);
+            int parameterCount = args[2] is DexArray types ? types.Length : 0;
+            var interpreter = state.Interpreter ?? throw new InvalidOperationException("getMethod requires an attached interpreter.");
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            for (string? current = represented; current is not null && visited.Add(current); current = interpreter.SuperclassDescriptorOf(current))
+            {
+                foreach (var method in interpreter.DeclaredMethodsOf(current))
+                {
+                    if (method.Method.Name != name) continue;
+                    if (method.Method.Proto.ParameterTypes.Count != parameterCount) continue;
+                    var methodObject = new DexObject("Ljava/lang/reflect/Method;");
+                    state.Methods.Add(methodObject, new MethodPeer(current, name, method.Method.Proto.Descriptor()));
+                    return methodObject;
+                }
+            }
+            throw new GuestExceptionCarrier(GuestThrowableMetadata.Create("Ljava/lang/NoSuchMethodException;", name));
+        });
         builder.Register(Api("Ljava/lang/Class;", "equals", "(Ljava/lang/Object;)Z"), (_, args) => ReferenceEquals(Receiver(args), args[1]) ? 1 : 0);
+        // Class.newInstance(): instantiates the represented guest class via its
+        // no-arg constructor. Reflection on framework/API-bound types fails closed
+        // (no guest <init> exists for them).
+        builder.Register(Api("Ljava/lang/Class;", "newInstance", "()Ljava/lang/Object;"), (_, args) =>
+        {
+            string represented = state.ClassPeerOf(Receiver(args)).RepresentedDescriptor;
+            var interpreter = state.Interpreter ?? throw new InvalidOperationException("newInstance requires an attached interpreter.");
+            if (!interpreter.HasGuestClass(represented))
+                throw new InvalidOperationException("newInstance requires a guest-defined class: " + represented);
+            return interpreter.ConstructInstance(represented);
+        });
         builder.Register(Api("Ljava/lang/Class;", "hashCode", "()I"), (_, args) => Receiver(args).GetHashCode());
         builder.Register(Api("Ljava/lang/Class;", "toString", "()Ljava/lang/String;"), (_, args) => "class " + ClassName(state.ClassPeerOf(Receiver(args)).RepresentedDescriptor));
         // The minimal Package surface SKYNET actually reaches (getName only).

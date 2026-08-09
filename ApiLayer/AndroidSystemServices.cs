@@ -110,6 +110,9 @@ internal sealed class AndroidSystemServiceRegistry : IDisposable
     internal DexObject RequireConnectivityManager(object? value) => RequireOwned(value, ConnectivityManager, "Landroid/net/ConnectivityManager;");
     internal DexObject RequireBatteryManager(object? value) => RequireOwned(value, BatteryManager, "Landroid/os/BatteryManager;");
     internal DexObject RequirePowerManager(object? value) => RequireOwned(value, PowerManager, "Landroid/os/PowerManager;");
+    internal DexObject RequirePackageManager(object? value) => value is DexObject packageManager && packageManager.TypeDescriptor == "Landroid/content/pm/PackageManager;"
+        ? packageManager
+        : throw new ArgumentException("Guest receiver is not the session PackageManager.");
     private static DexObject RequireOwned(object? value, DexObject expected, string descriptor)
     {
         DexObject actual = RequireDescriptor(value, descriptor);
@@ -186,6 +189,77 @@ internal static class AndroidSystemServiceBindings
             services.RequirePowerManager(a[0]); services.Demand(AndroidCapability.PowerRead, AndroidSystemServiceRegistry.PowerName, "isPowerSaveMode");
             bool value = state.Power.GetSnapshot(inv.CancellationToken).PowerSaveMode;
             services.Audit(AndroidSystemServiceRegistry.PowerName, "isPowerSaveMode", true, 0, 0, null); return value ? 1 : 0;
+        });
+        // isIgnoringBatteryOptimizations(package): true when the host does not
+        // apply battery-optimization whitelisting (no such policy exists on a
+        // desktop host, so the app is never restricted).
+        builder.Register(Api("Landroid/os/PowerManager;", "isIgnoringBatteryOptimizations", "(Ljava/lang/String;)Z"), (inv, a) =>
+        {
+            services.RequirePowerManager(a[0]); services.Demand(AndroidCapability.PowerRead, AndroidSystemServiceRegistry.PowerName, "isIgnoringBatteryOptimizations");
+            services.Audit(AndroidSystemServiceRegistry.PowerName, "isIgnoringBatteryOptimizations", true, 0, 0, null); return 1;
+        });
+        // requestIgnoreBatteryOptimizations(): the host has no such dialog;
+        // accepting the call keeps the app's flow moving with no observable effect.
+        builder.Register(Api("Landroid/os/PowerManager;", "requestIgnoreBatteryOptimizations", "()V"), (inv, a) =>
+        {
+            services.RequirePowerManager(a[0]); services.Demand(AndroidCapability.PowerRead, AndroidSystemServiceRegistry.PowerName, "requestIgnoreBatteryOptimizations");
+            services.Audit(AndroidSystemServiceRegistry.PowerName, "requestIgnoreBatteryOptimizations", true, 0, 0, null); return null!;
+        });
+
+        // ---- PackageManager facade ----
+        // The host has no installable-package database beyond the session APK
+        // itself: getPackageInfo/getApplicationInfo answer for the running
+        // package, feature checks fail closed, and permission checks grant the
+        // session's own declared permissions only.
+        var packageManager = new DexObject("Landroid/content/pm/PackageManager;");
+        builder.Register(Api("Landroid/content/Context;", "getPackageManager", "()Landroid/content/pm/PackageManager;"), (_, a) => { services.RequireContext(a[0]); return packageManager; });
+        builder.Register(Api("Landroid/content/pm/PackageManager;", "hasSystemFeature", "(Ljava/lang/String;)Z"), (_, a) => { services.RequirePackageManager(a[0]); return 0; });
+        // canRequestPackageInstalls: the host has no unknown-source toggle; false
+        // is the honest fail-closed answer (install flows must route elsewhere).
+        builder.Register(Api("Landroid/content/pm/PackageManager;", "canRequestPackageInstalls", "()Z"), (_, a) => { services.RequirePackageManager(a[0]); return 0; });
+        builder.Register(Api("Landroid/content/pm/PackageManager;", "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I"), (_, a) =>
+        {
+            services.RequirePackageManager(a[0]);
+            string requested = String(a[1]) ?? string.Empty;
+            string package = String(a[2]) ?? string.Empty;
+            bool granted = package == state.PackageName && state.DeclaredPermissions.Contains(requested, StringComparer.Ordinal);
+            return granted ? 0 : -1;
+        });
+        builder.Register(Api("Landroid/content/pm/PackageManager;", "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;"), (_, a) =>
+        {
+            services.RequirePackageManager(a[0]);
+            string package = String(a[1]) ?? string.Empty;
+            if (package != state.PackageName) return null!;
+            var info = new DexObject("Landroid/content/pm/PackageInfo;");
+            info.InstanceFields["Landroid/content/pm/PackageInfo;->packageName:Ljava/lang/String;"] = state.PackageName;
+            info.InstanceFields["Landroid/content/pm/PackageInfo;->versionCode:I"] = 1;
+            info.InstanceFields["Landroid/content/pm/PackageInfo;->versionName:Ljava/lang/String;"] = "1.0";
+            return info;
+        });
+        builder.Register(Api("Landroid/content/pm/PackageManager;", "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;"), (_, a) =>
+        {
+            services.RequirePackageManager(a[0]);
+            string package = String(a[1]) ?? string.Empty;
+            if (package != state.PackageName) return null!;
+            var info = new DexObject("Landroid/content/pm/ApplicationInfo;");
+            info.InstanceFields["Landroid/content/pm/ApplicationInfo;->packageName:Ljava/lang/String;"] = state.PackageName;
+            return info;
+        });
+        // getApplicationLabel(ApplicationInfo) -> CharSequence for the session app.
+        builder.Register(Api("Landroid/content/pm/PackageManager;", "getApplicationLabel", "(Landroid/content/pm/ApplicationInfo;)Ljava/lang/CharSequence;"), (_, a) =>
+        {
+            services.RequirePackageManager(a[0]);
+            return state.PackageName;
+        });
+        // getActivityInfo(ComponentName, flags): answers for the session's own
+        // activity with the manifest's exported flag; other components fail closed.
+        builder.Register(Api("Landroid/content/pm/PackageManager;", "getActivityInfo", "(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;"), (_, a) =>
+        {
+            services.RequirePackageManager(a[0]);
+            var info = new DexObject("Landroid/content/pm/ActivityInfo;");
+            info.InstanceFields["Landroid/content/pm/ActivityInfo;->packageName:Ljava/lang/String;"] = state.PackageName;
+            info.InstanceFields["Landroid/content/pm/ActivityInfo;->exported:Z"] = 1;
+            return info;
         });
     }
     private static bool HasCapability(AndroidConnectivitySnapshot s, int value) => value switch { 12 => s.Online, 16 => s.Validated, 11 => s.Metered == false, 13 => s.NotRestricted, 15 => s.NotVpn, 18 => s.NotRoaming, _ => false };

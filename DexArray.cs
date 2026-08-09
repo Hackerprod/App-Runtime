@@ -31,4 +31,12 @@ public sealed class DexArray
         if (ElementDescriptor is not ("J" or "D")) throw new InvalidOperationException("SetWide requires a long[] or double[] DEX array.");
         _values[index] = bits;
     }
+    /// <summary>Shallow clone: a new array of the same descriptor with the same
+    /// element references (real Object.clone() semantics for arrays).</summary>
+    public DexArray Clone()
+    {
+        var copy = new DexArray(ArrayDescriptor, _values.Length);
+        Array.Copy(_values, copy._values, _values.Length);
+        return copy;
+    }
 }
