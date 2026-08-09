@@ -11,7 +11,7 @@ namespace AndroidRuntime.Core.ApiLayer;
 
 public sealed record AndroidPeerLimits
 {
-    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024, int maxBoxed = 1024, int maxMapEntries = 1024, int maxMapViews = 256, int maxLazies = 256, int maxArrayDeques = 256, int maxLinkedHashSets = 256, int maxLinkedHashMaps = 256, int maxConcurrentHashMaps = 256)
+    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024, int maxBoxed = 1024, int maxMapEntries = 1024, int maxMapViews = 256, int maxLazies = 256, int maxArrayDeques = 256, int maxLinkedHashSets = 256, int maxLinkedHashMaps = 256, int maxConcurrentHashMaps = 256, int maxSharedPreferences = 64, int maxSharedPreferencesEditors = 64)
     {
         StringBuilders = maxStringBuilders;
         Bundles = maxBundles;
@@ -42,6 +42,8 @@ public sealed record AndroidPeerLimits
         LinkedHashSets = maxLinkedHashSets;
         LinkedHashMaps = maxLinkedHashMaps;
         ConcurrentHashMaps = maxConcurrentHashMaps;
+        SharedPreferences = maxSharedPreferences;
+        SharedPreferencesEditors = maxSharedPreferencesEditors;
         Validate();
     }
 
@@ -75,10 +77,12 @@ public sealed record AndroidPeerLimits
     public int LinkedHashSets { get; }
     public int LinkedHashMaps { get; }
     public int ConcurrentHashMaps { get; }
+    public int SharedPreferences { get; }
+    public int SharedPreferencesEditors { get; }
 
     public void Validate()
     {
-        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0 || Boxed <= 0 || MapEntries <= 0 || MapViews <= 0 || Lazies <= 0 || ArrayDeques <= 0 || LinkedHashSets <= 0 || LinkedHashMaps <= 0 || ConcurrentHashMaps <= 0)
+        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0 || Boxed <= 0 || MapEntries <= 0 || MapViews <= 0 || Lazies <= 0 || ArrayDeques <= 0 || LinkedHashSets <= 0 || LinkedHashMaps <= 0 || ConcurrentHashMaps <= 0 || SharedPreferences <= 0 || SharedPreferencesEditors <= 0)
             throw new ArgumentOutOfRangeException(nameof(AndroidPeerLimits), "Peer limits must be positive.");
     }
 }
@@ -175,6 +179,8 @@ public sealed class AndroidFrameworkState : IDisposable
         LinkedHashSets = new AndroidPeerStore<OrderedSetPeer>("LinkedHashSet", PeerLimits.LinkedHashSets);
         LinkedHashMaps = new AndroidPeerStore<LinkedHashMapPeer>("LinkedHashMap", PeerLimits.LinkedHashMaps);
         ConcurrentHashMaps = new AndroidPeerStore<ConcurrentHashMapPeer>("ConcurrentHashMap", PeerLimits.ConcurrentHashMaps);
+        SharedPreferences = new AndroidPeerStore<SharedPreferencesPeer>("SharedPreferences", PeerLimits.SharedPreferences);
+        SharedPreferencesEditors = new AndroidPeerStore<SharedPreferencesEditorPeer>("SharedPreferences.Editor", PeerLimits.SharedPreferencesEditors);
         ApplicationContext = new DexObject("Landroid/app/Application;");
         LauncherIntent = new DexObject("Landroid/content/Intent;");
         TypedArrayObject = new DexObject("Landroid/content/res/TypedArray;");
@@ -297,7 +303,11 @@ public sealed class AndroidFrameworkState : IDisposable
     /// <summary>Per-session SharedPreferences stores, keyed by preference-file
     /// name (real Android persists to disk; the runtime keeps an in-memory
     /// session store so getSharedPreferences flows work end-to-end).</summary>
-    internal Dictionary<string, Dictionary<string, object>> SharedPreferences { get; } = new(StringComparer.Ordinal);
+    internal AndroidPeerStore<SharedPreferencesPeer> SharedPreferences { get; }
+    /// <summary>Per-session SharedPreferences.Editor peers, one per edit() call
+    /// (real Android creates a new EditorImpl per edit(); the peer holds the
+    /// pending writes until apply()/commit()).</summary>
+    internal AndroidPeerStore<SharedPreferencesEditorPeer> SharedPreferencesEditors { get; }
     /// <summary>Guest SharedPreferences facade objects per preference-file name
     /// (stable identity per file, same reasoning as other facades).</summary>
     internal Dictionary<string, DexObject> SharedPreferenceObjects { get; } = new(StringComparer.Ordinal);
@@ -309,7 +319,7 @@ public sealed class AndroidFrameworkState : IDisposable
             {
                 existing = new DexObject("Landroid/content/SharedPreferences;");
                 SharedPreferenceObjects[name] = existing;
-                SharedPreferences.TryAdd(name, new Dictionary<string, object>(StringComparer.Ordinal));
+                SharedPreferences.Add(existing, new SharedPreferencesPeer());
             }
             return existing;
         }
@@ -644,6 +654,8 @@ public sealed class AndroidFrameworkState : IDisposable
         LinkedHashSets.Clear();
         LinkedHashMaps.Clear();
         ConcurrentHashMaps.Clear();
+        SharedPreferences.Clear();
+        SharedPreferencesEditors.Clear();
         Activity = null;
         SystemServices?.Dispose();
     }
@@ -1108,6 +1120,39 @@ internal sealed class ConcurrentHashMapPeer
     internal Dictionary<object, object?> Entries { get; } = new();
     internal int Count => Entries.Count;
     internal void Clear() => Entries.Clear();
+}
+
+/// <summary>
+/// In-memory store for a guest android.content.SharedPreferences file. Real
+/// Android persists each named file to disk; this runtime has no Android
+/// app-data directory, so the store is in-memory only, per session — values do
+/// NOT survive process restart (documented limitation, same honest tone as
+/// WeakHashMap's "no guest GC model" note). The per-name singleton facade lives
+/// in AndroidFrameworkState.SharedPreferenceObjects; this peer holds the actual
+/// values behind it. No real synchronization: the GIL serializes all guest
+/// bytecode (same reasoning as AtomicReference).
+/// </summary>
+internal sealed class SharedPreferencesPeer
+{
+    internal Dictionary<string, object> Values { get; } = new(StringComparer.Ordinal);
+}
+
+/// <summary>
+/// Pending-write state for a guest SharedPreferences.Editor (one per edit()
+/// call — real Android creates a new EditorImpl per edit()). Mirrors the real
+/// EditorImpl: put* accumulate in Modified, remove() stores a removal sentinel,
+/// clear() sets a flag; apply()/commit() fold the pending writes into the owner
+/// peer's Values. Under this runtime's GIL a synchronous in-memory fold is
+/// equivalent to apply()'s async-conceptually disk write (no disk exists) and
+/// commit() always returns true (an in-memory write cannot fail) — same
+/// reasoning as AtomicReference/Collections.synchronizedMap/kotlin.Lazy.
+/// </summary>
+internal sealed class SharedPreferencesEditorPeer
+{
+    internal static readonly object RemoveMarker = new();
+    internal required SharedPreferencesPeer Owner { get; init; }
+    internal Dictionary<string, object> Modified { get; } = new(StringComparer.Ordinal);
+    internal bool Clear { get; set; }
 }
 
 /// <summary>
