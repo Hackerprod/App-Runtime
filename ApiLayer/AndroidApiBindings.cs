@@ -554,6 +554,59 @@ public static class AndroidApiBindings
 			if (state.ArrayLists.TryGet(Receiver(args), out var list)) { list.RequireMutable(); list.Elements.Clear(); return null!; }
 			throw new InvalidOperationException("Collection receiver has no bound peer: " + Receiver(args).TypeDescriptor);
 		});
+		// java.util.Collection.toArray(T[]): SAME multi-peer-store dispatch as the
+		// sibling removeAll/remove/addAll bindings above (try each relevant store in
+		// turn via TryGet; throw only if none match — the precedent that prevents
+		// the earlier CopyOnWriteArraySet regression). Real contract VERIFIED against
+		// the Java SE 17 Collection.toArray(T[]) docs:
+		//   - a.length >= size: elements are copied INTO a; if a.length > size, the
+		//     slot IMMEDIATELY AFTER the last copied element is set to null (the
+		//     documented null terminator), and the rest of a is left untouched.
+		//   - a.length < size: a NEW array of the specified array's runtime type
+		//     (here always Object[] per the descriptor) and the collection's size is
+		//     allocated and returned; the caller's a is untouched.
+		// Iteration order is the peer's own order (list order for ArrayList-shaped
+		// peers, the backing set's enumeration for set-shaped peers).
+		builder.Register(Api("Ljava/util/Collection;", "toArray", "([Ljava/lang/Object;)[Ljava/lang/Object;"), delegate(AndroidApiInvocation _, object[] args)
+		{
+			var elements = new List<object>();
+			if (state.CopyOnWriteArraySets.TryGet(Receiver(args), out var set))
+				elements.AddRange(set);
+			else if (state.MapViews.TryGet(Receiver(args), out var view))
+				elements.AddRange(view);
+			else if (state.ArrayLists.TryGet(Receiver(args), out var list))
+				elements.AddRange(list.Elements);
+			else
+				throw new InvalidOperationException("Collection receiver has no bound peer: " + Receiver(args).TypeDescriptor);
+
+			var destination = args[1];
+			if (destination is not DexArray && destination is not object[])
+				throw new ArgumentException("toArray destination must be an Object[].");
+			int destinationLength = destination is DexArray dex ? dex.Length : ((object[])destination!).Length;
+			if (destinationLength >= elements.Count)
+			{
+				// Copy INTO the caller's array; if it had extra room, null-terminate
+				// the slot immediately after the last copied element (real contract).
+				for (int index = 0; index < elements.Count; index++)
+					SetArrayElement(destination, index, elements[index]);
+				if (destinationLength > elements.Count)
+					SetArrayElement(destination, elements.Count, null);
+				return destination;
+			}
+			// Destination too small: allocate a NEW array of the SPECIFIED array's
+			// runtime type and the collection's size (real contract — e.g. passing
+			// Integer[0] yields a new Integer[], which the caller then check-casts).
+			var fresh = new DexArray(destination is DexArray destDex ? destDex.ArrayDescriptor : "[Ljava/lang/Object;", elements.Count);
+			for (int index = 0; index < elements.Count; index++)
+				fresh.Set(index, elements[index]);
+			return fresh;
+		});
+	}
+
+	private static void SetArrayElement(object array, int index, object value)
+	{
+		if (array is DexArray dex) dex.Set(index, value);
+		else ((object[])array)[index] = value;
 	}
 
 	private static void RegisterViews(AndroidApiRegistryBuilder builder, AndroidFrameworkState state)
