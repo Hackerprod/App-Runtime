@@ -63,7 +63,11 @@ internal static class JavaUtilCollectionsBindings
         });
         builder.Register(Api(CollectionsClass, "unmodifiableSet", "(Ljava/util/Set;)Ljava/util/Set;"), (_, args) =>
         {
-            var backing = state.MapViews.Get(RequireDex(args[0]));
+            var source = RequireDex(args[0]);
+            HashSet<object?> backing;
+            if (state.MapViews.TryGet(source, out var view)) backing = view;
+            else if (state.CopyOnWriteArraySets.TryGet(source, out var cow)) backing = cow;
+            else throw new InvalidOperationException("unmodifiableSet source is not a bound Set: " + source.TypeDescriptor);
             var wrapper = new DexObject(SetClass);
             state.MapViews.Add(wrapper, new HashSet<object?>(backing));
             return wrapper;

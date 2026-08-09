@@ -124,14 +124,25 @@ internal static class JavaUtilMapBindings
     {
         builder.Register(Api(owner, "iterator", "()Ljava/util/Iterator;"), (_, args) =>
         {
-            var view = state.MapViews.Get(Receiver(args));
+            var view = RequireSetBacking(state, Receiver(args));
             var iterator = new DexObject("Ljava/util/Iterator;");
             state.Iterators.Add(iterator, new IteratorPeer(view));
             return iterator;
         });
-        builder.Register(Api(owner, "size", "()I"), (_, args) => state.MapViews.Get(Receiver(args)).Count);
-        builder.Register(Api(owner, "contains", "(Ljava/lang/Object;)Z"), (_, args) => state.MapViews.Get(Receiver(args)).Contains(args[1]) ? 1 : 0);
-        builder.Register(Api(owner, "isEmpty", "()Z"), (_, args) => state.MapViews.Get(Receiver(args)).Count == 0 ? 1 : 0);
+        builder.Register(Api(owner, "size", "()I"), (_, args) => RequireSetBacking(state, Receiver(args)).Count);
+        builder.Register(Api(owner, "contains", "(Ljava/lang/Object;)Z"), (_, args) => RequireSetBacking(state, Receiver(args)).Contains(args[1]) ? 1 : 0);
+        builder.Register(Api(owner, "isEmpty", "()Z"), (_, args) => RequireSetBacking(state, Receiver(args)).Count == 0 ? 1 : 0);
+    }
+
+    /// <summary>Resolves a Set/Collection receiver's backing hash set across BOTH
+    /// Set-shaped stores (snapshot MapViews AND CopyOnWriteArraySets — the
+    /// interface ids are shared by both, so a Set-typed call site must work for
+    /// either).</summary>
+    private static HashSet<object?> RequireSetBacking(AndroidFrameworkState state, DexObject receiver)
+    {
+        if (state.MapViews.TryGet(receiver, out var view)) return view;
+        if (state.CopyOnWriteArraySets.TryGet(receiver, out var cow)) return cow;
+        throw new InvalidOperationException("Set/Collection peer is not initialized for " + receiver.TypeDescriptor);
     }
 
     private static object PutValue(AndroidFrameworkState state, object receiver, object? key, object? value)

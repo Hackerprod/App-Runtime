@@ -390,7 +390,7 @@ public sealed class AndroidApiRegistry
             if (api.MethodName is "toString" or "hashCode" or "compare" && api.MethodDescriptor.Length > 2 && api.MethodDescriptor[1] != ')') return true;
             return false;
         }
-        if (api.ClassDescriptor is "Landroid/app/Activity;" or "Landroid/content/Context;" or "Landroid/os/BaseBundle;" or "Landroid/os/Bundle;" or "Landroid/content/Intent;" or "Landroid/widget/Toast;" or "Ljava/lang/String;" or "Ljava/lang/StringBuilder;" or "Ljava/lang/CharSequence;" or "Ljava/util/concurrent/TimeUnit;" or "Ljava/util/concurrent/ThreadPoolExecutor;" or "Ljava/util/concurrent/ExecutorService;" or "Ljava/util/concurrent/Executor;" or "Ljava/util/concurrent/FutureTask;" or "Ljava/util/concurrent/Future;" or "Ljava/util/concurrent/ThreadFactory;" or "Landroid/os/Handler;" or "Landroid/os/Looper;" or "Ljava/lang/Class;" or "Ljava/lang/Enum;" or "Ljava/lang/reflect/Method;") return false;
+        if (api.ClassDescriptor is "Landroid/app/Activity;" or "Landroid/content/Context;" or "Landroid/os/BaseBundle;" or "Landroid/os/Bundle;" or "Landroid/content/Intent;" or "Landroid/widget/Toast;" or "Ljava/lang/String;" or "Ljava/lang/StringBuilder;" or "Ljava/lang/CharSequence;" or "Ljava/util/concurrent/TimeUnit;" or "Ljava/util/concurrent/ThreadPoolExecutor;" or "Ljava/util/concurrent/ExecutorService;" or "Ljava/util/concurrent/Executor;" or "Ljava/util/concurrent/FutureTask;" or "Ljava/util/concurrent/Future;" or "Ljava/util/concurrent/ThreadFactory;" or "Landroid/os/Handler;" or "Landroid/os/Looper;" or "Ljava/lang/Class;" or "Ljava/lang/Enum;" or "Ljava/lang/reflect/Method;" or "Ljava/util/ArrayDeque;" or "Ljava/util/Deque;" or "Ljava/util/Queue;") return false;
         return null;
     }
 
