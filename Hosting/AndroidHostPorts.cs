@@ -2,7 +2,9 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using AndroidRuntime.Core.ApiLayer;
+using AndroidRuntime.Core.Apk;
 using AndroidRuntime.Core.Dex;
+using AndroidRuntime.Core.Ui;
 
 namespace AndroidRuntime.Core.Hosting;
 
@@ -226,7 +228,8 @@ public sealed class AndroidRuntimeServices
         IAndroidConnectivity? connectivity = null,
         IAndroidServiceAuditSink? serviceAudit = null,
         AndroidServiceLimits? serviceLimits = null,
-        IAndroidPower? power = null)
+        IAndroidPower? power = null,
+        Func<AndroidResourceResolver, AndroidResourceQueryService, int, IAndroidViewBridge?>? viewBridgeFactory = null)
     {
         WindowFactory = windowFactory ?? throw new ArgumentNullException(nameof(windowFactory));
         LogSink = logSink ?? throw new ArgumentNullException(nameof(logSink));
@@ -248,6 +251,7 @@ public sealed class AndroidRuntimeServices
         ServiceAudit = serviceAudit ?? new NullAndroidServiceAuditSink();
         ServiceLimits = serviceLimits ?? AndroidServiceLimits.Default; ServiceLimits.Validate();
         Power = power ?? new UnavailableAndroidPower();
+        ViewBridgeFactory = viewBridgeFactory;
     }
 
     public IActivityWindowFactory WindowFactory { get; }
@@ -265,6 +269,12 @@ public sealed class AndroidRuntimeServices
     public IAndroidServiceAuditSink ServiceAudit { get; }
     public AndroidServiceLimits ServiceLimits { get; }
     public IAndroidPower Power { get; }
+    /// <summary>Phase-2 view bridge factory provided by the host (ViewRuntime-
+    /// backed). Called with the per-session resolver + resource-query service +
+    /// the manifest's application theme style id once the APK is loaded; null
+    /// means the framework state falls back to the unavailable bridge (no
+    /// local visual behavior).</summary>
+    public Func<AndroidResourceResolver, AndroidResourceQueryService, int, IAndroidViewBridge?>? ViewBridgeFactory { get; }
 
     public static AndroidRuntimeServices CreateHeadless() =>
         new(new InMemoryActivityWindowFactory(), new ConsoleAndroidLogSink());

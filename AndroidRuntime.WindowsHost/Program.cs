@@ -47,7 +47,7 @@ public static class Program
         var runtime = new AndroidAppRuntime();
         await using var hosted = await runtime.LaunchSessionAsync(
             traceOutput.ApkStream,
-            new AndroidRuntimeServices(factory, logs, traceCapacity: 4096, clock: new WindowsAndroidClock(), capabilityPolicy: new AndroidCapabilityPolicy(options.Grants), clipboard: clipboard, connectivity: connectivity, power: new WindowsPowerAdapter()));
+            new AndroidRuntimeServices(factory, logs, traceCapacity: 4096, clock: new WindowsAndroidClock(), capabilityPolicy: new AndroidCapabilityPolicy(options.Grants), clipboard: clipboard, connectivity: connectivity, power: new WindowsPowerAdapter(), viewBridgeFactory: ViewRuntimeAndroidViewBridge.TryCreate));
         Console.WriteLine($"READY hwnd={hosted.Window.Handle} title={hosted.Window.Title}");
 
         if (options.CaptureFramePath is string capturePath)

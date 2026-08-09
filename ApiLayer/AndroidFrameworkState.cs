@@ -127,6 +127,7 @@ public sealed class AndroidFrameworkState : IDisposable
         int targetSdkVersion = 1,
         IAndroidPower? power = null,
         AndroidResourceResolver? resources = null,
+        AndroidResourceQueryService? resourceQueries = null,
         IAndroidViewBridge? viewBridge = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
@@ -153,6 +154,7 @@ public sealed class AndroidFrameworkState : IDisposable
         ViewBridge = viewBridge ?? UnavailableAndroidViewBridge.Instance;
         Resources = resources;
         DisplayState = AndroidDisplayState.Default;
+        ResourceQueries = resourceQueries;
         StringBuilders = new AndroidPeerStore<StringBuilder>("StringBuilder", PeerLimits.StringBuilders);
         Bundles = new AndroidPeerStore<BundlePeer>("Bundle", PeerLimits.Bundles);
         Intents = new AndroidPeerStore<IntentPeer>("Intent", PeerLimits.Intents);
@@ -217,6 +219,10 @@ public sealed class AndroidFrameworkState : IDisposable
     /// code (Configuration/DisplayMetrics/WindowManager). The host updates this
     /// from the real window size/density; ViewRuntime renders at the same state.</summary>
     internal AndroidDisplayState DisplayState { get; set; }
+    /// <summary>The Phase-2 resource-query service ViewRuntime calls back into
+    /// (resolve_resource / resolve_style / fetch_file), backed by the existing
+    /// ARSC/AXML parsing. Null when no APK resources are attached.</summary>
+    internal AndroidResourceQueryService? ResourceQueries { get; }
     internal AndroidSystemServiceRegistry? SystemServices { get; set; }
     public AndroidPeerCounts PeerCounts => new(StringBuilders.Count, Bundles.Count, Intents.Count, Toasts.Count);
     internal bool IsFinishing => Volatile.Read(ref _finishing) != 0;

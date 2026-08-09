@@ -4,6 +4,7 @@ using AndroidRuntime.Core.ApiLayer.Bindings;
 using AndroidRuntime.Core.Apk;
 using AndroidRuntime.Core.Dex;
 using AndroidRuntime.Core.Hosting;
+using AndroidRuntime.Core.Ui;
 
 namespace AndroidRuntime.Core;
 
@@ -87,7 +88,8 @@ public sealed class AndroidAppRuntime
             {
                 var apk = ApkLoader.Load(apkStream);
                 var manifest = AndroidManifestReader.Parse(apk.AndroidManifestXml);
-                AndroidResourceResolver? resources = apk.ResourcesArsc is null ? null : AndroidResourceResolver.Create(apk);
+        AndroidResourceResolver? resources = apk.ResourcesArsc is null ? null : AndroidResourceResolver.Create(apk);
+        AndroidResourceQueryService? resourceQueries = resources is null ? null : new AndroidResourceQueryService(resources, apk);
                 foreach (byte[] dexBytes in apk.ClassesDexFiles) EnsureVerified(dexBytes);
                 var dexSet = DexFileSet.ParseMany(apk.ClassesDexFiles);
                 IAndroidApiTraceSink traceSink = services.AdditionalTraceSink is null
@@ -118,7 +120,9 @@ public sealed class AndroidAppRuntime
                     services.ServiceLimits,
                     manifest.TargetSdkVersion,
                     services.Power,
-                    resources);
+                    resources,
+                    resourceQueries,
+                    services.ViewBridgeFactory is null || resources is null ? null : services.ViewBridgeFactory(resources, resourceQueries!, manifest.ApplicationThemeStyleId));
                 var registry = AndroidApiBindings.CreateBuilder(frameworkState, services.LogSink).Build();
                 var interpreter = new DexInterpreter(dexSet, registry, apiSession: apiContext, gil: lane.Gil);
                 interpreter.StaticFieldMissDiagnostic = message => Console.Error.WriteLine("[DEX] " + message);
@@ -164,6 +168,7 @@ public sealed class AndroidAppRuntime
         var apk = ApkLoader.Load(apkStream);
         var manifest = AndroidManifestReader.Parse(apk.AndroidManifestXml);
         AndroidResourceResolver? resources = apk.ResourcesArsc is null ? null : AndroidResourceResolver.Create(apk);
+        AndroidResourceQueryService? resourceQueries = resources is null ? null : new AndroidResourceQueryService(resources, apk);
         foreach (byte[] dexBytes in apk.ClassesDexFiles) EnsureVerified(dexBytes);
         var dexSet = DexFileSet.ParseMany(apk.ClassesDexFiles);
         string sessionId = Guid.NewGuid().ToString("N");
@@ -194,7 +199,9 @@ public sealed class AndroidAppRuntime
             services.ServiceLimits,
             manifest.TargetSdkVersion,
             services.Power,
-            resources);
+            resources,
+            resourceQueries,
+            services.ViewBridgeFactory is null || resources is null ? null : services.ViewBridgeFactory(resources, resourceQueries!, manifest.ApplicationThemeStyleId));
         var registry = AndroidApiBindings.CreateBuilder(frameworkState, services.LogSink).Build();
         var interpreter = new DexInterpreter(dexSet, registry, apiSession: apiContext);
         interpreter.StaticFieldMissDiagnostic = message => Console.Error.WriteLine("[DEX] " + message);

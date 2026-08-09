@@ -20,7 +20,7 @@ public sealed class AndroidManifestActivity
 
 public sealed class AndroidManifest
 {
-    internal AndroidManifest(string packageName, IReadOnlyList<AndroidManifestActivity> activities, AndroidManifestActivity launcher, IReadOnlyCollection<string> permissions, int targetSdkVersion)
+    internal AndroidManifest(string packageName, IReadOnlyList<AndroidManifestActivity> activities, AndroidManifestActivity launcher, IReadOnlyCollection<string> permissions, int targetSdkVersion, int applicationThemeStyleId)
     {
         PackageName = packageName;
         Activities = Array.AsReadOnly(activities.ToArray());
@@ -28,6 +28,7 @@ public sealed class AndroidManifest
         LauncherActivityDescriptor = launcher.Descriptor;
         UsesPermissions = Array.AsReadOnly(permissions.Distinct(StringComparer.Ordinal).ToArray());
         TargetSdkVersion = targetSdkVersion;
+        ApplicationThemeStyleId = applicationThemeStyleId;
     }
 
     public string PackageName { get; }
@@ -36,6 +37,11 @@ public sealed class AndroidManifest
     public string LauncherActivityDescriptor { get; }
     public IReadOnlyCollection<string> UsesPermissions { get; }
     public int TargetSdkVersion { get; }
+    /// <summary>The app's active theme style resource id from
+    /// &lt;application android:theme&gt; (0 when the manifest declares none).
+    /// Phase 2: ViewRuntime resolves ?attr/... by walking this style id through
+    /// the bridge's resolve_style callback — the theme IS a style chain.</summary>
+    public int ApplicationThemeStyleId { get; }
 }
 
 /// <summary>Strict reader for the bounded binary XML subset needed to discover an APK launcher Activity.</summary>
@@ -81,6 +87,7 @@ public static class AndroidManifestReader
         var permissions = new HashSet<string>(StringComparer.Ordinal);
         int minSdkVersion = 1;
         int? declaredTargetSdkVersion = null;
+        int applicationThemeStyleId = 0;
 
         int offset = root.HeaderSize;
         while (offset < root.Size)
@@ -200,6 +207,13 @@ public static class AndroidManifestReader
                         activities.Add(new AndroidManifestActivity(resolvedName, descriptor));
                         frame.ActivityIndex = activities.Count - 1;
                     }
+                    else if (elementName == "application" && frames.Count == 1 && frames[^1].Name == "manifest")
+                    {
+                        // The active theme: <application android:theme> is a typed
+                        // reference to a style resource. ViewRuntime resolves
+                        // ?attr/... by walking this style id (theme == style chain).
+                        applicationThemeStyleId = FindReferenceAttribute(attributes, AndroidNamespace, "theme") ?? 0;
+                    }
                     else if (elementName == "intent-filter" && frames.Count > 0 &&
                              frames[^1].Name == "activity" && frames[^1].ActivityIndex >= 0)
                     {
@@ -253,7 +267,7 @@ public static class AndroidManifestReader
             throw Invalid("manifest package must not be empty");
         var launcher = activities.FirstOrDefault(activity => activity.IsLauncher)
             ?? throw Invalid("manifest does not declare an activity with MAIN and LAUNCHER in the same intent-filter");
-        return new AndroidManifest(packageName, activities.AsReadOnly(), launcher, permissions.ToArray(), declaredTargetSdkVersion ?? minSdkVersion);
+        return new AndroidManifest(packageName, activities.AsReadOnly(), launcher, permissions.ToArray(), declaredTargetSdkVersion ?? minSdkVersion, applicationThemeStyleId);
     }
 
     public static string ToDexDescriptor(string packageName, string declaredActivityName)
@@ -370,11 +384,23 @@ public static class AndroidManifestReader
                     : type is >= 0x10 and <= 0x1f
                         ? typedData.ToString(CultureInfo.InvariantCulture)
                         : null;
-        return new XmlAttribute(namespaceUri, name, value);
+        return new XmlAttribute(namespaceUri, name, value, type, typedData);
     }
 
     private static string? FindAttribute(IEnumerable<XmlAttribute> attributes, string? namespaceUri, string name) =>
         attributes.FirstOrDefault(attribute => attribute.NamespaceUri == namespaceUri && attribute.Name == name)?.Value;
+
+    /// <summary>Finds an attribute by name and returns its raw typed data when the
+    /// value is a TYPE_REFERENCE (0x01) resource id — used for android:theme,
+    /// which carries the style resource id. Returns null when absent or not a
+    /// reference.</summary>
+    private static int? FindReferenceAttribute(IEnumerable<XmlAttribute> attributes, string? namespaceUri, string name)
+    {
+        XmlAttribute? attribute = attributes.FirstOrDefault(item => item.NamespaceUri == namespaceUri && item.Name == name);
+        if (attribute is null || attribute.Type != 0x01 || attribute.TypedData > int.MaxValue)
+            return null;
+        return (int)attribute.TypedData;
+    }
 
     private static Chunk ReadChunk(ReadOnlySpan<byte> data, int offset, int enclosingEnd)
     {
@@ -436,7 +462,7 @@ public static class AndroidManifestReader
         new("Binary XML chunk error: " + message, inner);
 
     private readonly record struct Chunk(ushort Type, int HeaderSize, int Size, int Offset);
-    private sealed record XmlAttribute(string? NamespaceUri, string Name, string? Value);
+    private sealed record XmlAttribute(string? NamespaceUri, string Name, string? Value, byte Type = 0, uint TypedData = 0);
     private sealed class IntentFilterState
     {
         public bool HasMain { get; set; }
