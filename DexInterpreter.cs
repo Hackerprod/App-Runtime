@@ -78,6 +78,16 @@ namespace AndroidRuntime.Core.Dex
         internal Func<string, string, object> FrameworkStaticField { get; set; }
 
         /// <summary>
+        /// Diagnostics hook fired when a static-field sget resolves nowhere and
+        /// silently falls back to its JLS default (0/null). The fallback VALUE is
+        /// real Java semantics and stays; this hook makes the "why is it defaulting"
+        /// path observable so silent-wrong-zero bugs surface immediately instead of
+        /// three call frames later as a confusing downstream error. Hosts connect it
+        /// (e.g. to stderr); null by default.
+        /// </summary>
+        internal Action<string> StaticFieldMissDiagnostic { get; set; }
+
+        /// <summary>
         /// Provider that materializes the canonical Class object for a type
         /// descriptor (const-class uses it; Object.getClass and friends share the
         /// same cache so reference identity holds). Wired by
@@ -919,6 +929,15 @@ namespace AndroidRuntime.Core.Dex
                                 object val;
                                 if (!_staticFields.TryGetValue(FieldKey(fref), out val))
                                     val = FrameworkStaticField != null ? FrameworkStaticField(fref.ClassDescriptor, fref.Name) : null;
+                                if (val is null && DefaultFieldValue(fref.Type) is not null)
+                                {
+                                    // Silent-default observability: a static field that
+                                    // resolved nowhere (no static_values, no <clinit>
+                                    // sput, no framework hook) reads as its JLS default.
+                                    // The default VALUE stays (real semantics); this line
+                                    // makes the "why is it defaulting" path visible.
+                                    StaticFieldMissDiagnostic?.Invoke("sget defaulted uninitialized static field " + fref + " to " + DefaultFieldValue(fref.Type) + " (no static_values entry, no <clinit> sput, no framework static field)");
+                                }
                                 regs[hiByte] = val ?? DefaultFieldValue(fref.Type);
                                 pc += 2;
                             }
@@ -1495,6 +1514,12 @@ namespace AndroidRuntime.Core.Dex
             _classInitOwner[classDescriptor] = Environment.CurrentManagedThreadId;
             try
             {
+                // static_values apply at class-load time BEFORE any <clinit> (JLS:
+                // field defaults, then static_values, then <clinit> which can
+                // overwrite). AGP emits R$* resource-id fields this way instead of
+                // a <clinit> sput sequence; without this they silently default to 0.
+                foreach (var pair in cls.StaticFieldValues)
+                    _staticFields[FieldKey(pair.Key)] = pair.Value;
                 DexEncodedMethod clinit = _dexSet.FindMethodExact(classDescriptor, "<clinit>", "()V");
                 if (clinit is not null)
                     Execute(clinit, Array.Empty<object>());

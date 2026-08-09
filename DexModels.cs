@@ -99,6 +99,18 @@ namespace AndroidRuntime.Core.Dex
         /// <summary>Interfaces this class implements (or, for an interface, extends),
         /// parsed from the class_def interfaces_off type_list.</summary>
         public List<string> Interfaces = new List<string>();
+        /// <summary>
+        /// Static field initial values from the class_def's static_values encoded
+        /// array (AGP emits R$* resource-id fields this way instead of a &lt;clinit&gt;
+        /// sput sequence). Applied by the interpreter before any &lt;clinit&gt;, matching
+        /// the JLS order (field defaults, then static_values, then &lt;clinit&gt;). Per
+        /// the DEX spec the array covers only a PREFIX of the static fields in
+        /// class_data declaration order; fields beyond its length keep defaults.
+        /// </summary>
+        public List<KeyValuePair<DexFieldRef, object>> StaticFieldValues = new();
+        /// <summary>Static fields in class_data declaration order (the order the
+        /// static_values array aligns to).</summary>
+        public List<DexFieldRef> StaticFields = new();
 
         public IEnumerable<DexEncodedMethod> AllMethods()
         {

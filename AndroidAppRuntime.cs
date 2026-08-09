@@ -120,6 +120,7 @@ public sealed class AndroidAppRuntime
                     resources);
                 var registry = AndroidApiBindings.CreateBuilder(frameworkState, services.LogSink).Build();
                 var interpreter = new DexInterpreter(dexSet, registry, apiSession: apiContext, gil: lane.Gil);
+                interpreter.StaticFieldMissDiagnostic = message => Console.Error.WriteLine("[DEX] " + message);
                 frameworkState.Gil = interpreter.Gil;
                 frameworkState.Lane = lane;
                 frameworkState.AttachInterpreter(interpreter);
@@ -195,6 +196,7 @@ public sealed class AndroidAppRuntime
             resources);
         var registry = AndroidApiBindings.CreateBuilder(frameworkState, services.LogSink).Build();
         var interpreter = new DexInterpreter(dexSet, registry, apiSession: apiContext);
+        interpreter.StaticFieldMissDiagnostic = message => Console.Error.WriteLine("[DEX] " + message);
         frameworkState.Gil = interpreter.Gil;
         frameworkState.AttachInterpreter(interpreter);
         JavaLangThreadBindings.InitializeMainGuestThread(frameworkState);

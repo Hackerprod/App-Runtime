@@ -107,6 +107,7 @@ namespace AndroidRuntime.Core.Dex
                 uint superclassIdx = U32(data, baseOff + 8);
                 uint interfacesOff = U32(data, baseOff + 12);
                 uint classDataOff = U32(data, baseOff + 24);
+                uint staticValuesOff = U32(data, baseOff + 28);
 
                 var cls = new DexClass();
                 cls.Descriptor = dex.TypeDescriptors[(int)classIdx];
@@ -120,6 +121,12 @@ namespace AndroidRuntime.Core.Dex
                 if (classDataOff != 0)
                 {
                     ParseClassData(data, (int)classDataOff, dex, cls);
+                    // The static_values encoded array provides initial values for the
+                    // static fields (in class_data order). AGP emits R$* resource-id
+                    // fields this way instead of a <clinit> sput sequence; without it
+                    // those fields silently default to 0.
+                    if (staticValuesOff != 0)
+                        ReadStaticFieldValues(data, (int)staticValuesOff, dex, cls);
                 }
 
                 dex.Classes.Add(cls);
@@ -146,12 +153,14 @@ namespace AndroidRuntime.Core.Dex
             uint directMethodsSize = ReadUleb128(data, ref cursor);
             uint virtualMethodsSize = ReadUleb128(data, ref cursor);
 
-            // encoded_field: solo necesitamos avanzar el cursor correctamente; no
-            // guardamos valores estáticos iniciales en este prototipo.
+            // Static field refs in declaration order — the static_values encoded
+            // array aligns to this order (prefix rule).
+            uint fieldIdx = 0;
             for (uint i = 0; i < staticFieldsSize; i++)
             {
-                ReadUleb128(data, ref cursor); // field_idx_diff
+                fieldIdx += ReadUleb128(data, ref cursor); // field_idx_diff
                 ReadUleb128(data, ref cursor); // access_flags
+                cls.StaticFields.Add(dex.Fields[(int)fieldIdx]);
             }
             for (uint i = 0; i < instanceFieldsSize; i++)
             {
@@ -176,6 +185,94 @@ namespace AndroidRuntime.Core.Dex
                 uint codeOff = ReadUleb128(data, ref cursor);
                 cls.VirtualMethods.Add(BuildEncodedMethod(data, dex, methodIdx, access, codeOff));
             }
+        }
+
+        /// <summary>
+        /// Parses the class_def's static_values encoded_array_item into the class's
+        /// StaticFieldValues. Format per the official Dalvik Executable format spec
+        /// (class_def_item.static_values_off -> encoded_array_item): uleb128 size,
+        /// then `size` encoded_value items. Each encoded_value's first byte is
+        /// (value_arg &lt;&lt; 5) | value_type; value_arg = byte width - 1 for the fixed
+        /// types, and the value bytes are little-endian. The array covers a PREFIX
+        /// of the class's static fields in class_data declaration order; fields
+        /// beyond its length keep their default 0/null (per the spec).
+        /// </summary>
+        private static void ReadStaticFieldValues(byte[] data, int offset, DexFile dex, DexClass cls)
+        {
+            int cursor = offset;
+            uint size = ReadUleb128(data, ref cursor);
+            uint count = Math.Min(size, (uint)cls.StaticFields.Count);
+            for (uint i = 0; i < count; i++)
+            {
+                var field = cls.StaticFields[(int)i];
+                cls.StaticFieldValues.Add(new KeyValuePair<DexFieldRef, object>(field, ReadEncodedValue(data, ref cursor, dex)));
+            }
+        }
+
+        /// <summary>Reads one encoded_value per the spec's encoded_value table.
+        /// Supported types: byte/short/char/int/long/float/double/string/type/
+        /// field/method/enum/null/boolean. Arrays/annotations/method-handles are
+        /// not valid in a static_values initializer (fail closed).</summary>
+        private static object ReadEncodedValue(byte[] data, ref int cursor, DexFile dex)
+        {
+            int header = data[cursor++];
+            int valueType = header & 0x1f;
+            int valueArg = header >> 5;
+            switch (valueType)
+            {
+                case 0x00: return (sbyte)data[cursor++];                       // VALUE_BYTE (arg 0)
+                case 0x02: return (short)ReadSizedSigned(data, ref cursor, valueArg + 1);   // VALUE_SHORT (arg 1, sign-extended)
+                case 0x03: return (int)(char)ReadSizedUnsigned(data, ref cursor, valueArg + 1); // VALUE_CHAR (arg 1, UNSIGNED zero-extended)
+                case 0x04: return (int)ReadSizedSigned(data, ref cursor, valueArg + 1);      // VALUE_INT (arg 3, sign-extended)
+                case 0x06: return ReadSizedSigned(data, ref cursor, valueArg + 1);           // VALUE_LONG (arg 7, sign-extended)
+                case 0x10: // VALUE_FLOAT (arg 3): RIGHT-zero-extended — the compact
+                           // encoding stores the TOP bytes; the decoder reassembles
+                           // little-endian into the low position, then shifts back up
+                           // to the high end (spec/dexlib2 readSizedRightExtendedInt).
+                    {
+                        int size = valueArg + 1;
+                        return BitConverter.Int32BitsToSingle((int)(ReadSizedUnsigned(data, ref cursor, size) << ((4 - size) * 8)));
+                    }
+                case 0x11: // VALUE_DOUBLE (arg 7): same right-zero-extension rule, 8 bytes.
+                    {
+                        int size = valueArg + 1;
+                        return BitConverter.Int64BitsToDouble(ReadSizedUnsigned(data, ref cursor, size) << ((8 - size) * 8));
+                    }
+                case 0x17: return dex.Strings[(int)ReadSizedUnsigned(data, ref cursor, valueArg + 1)];                    // VALUE_STRING (arg 3)
+                case 0x18: return dex.TypeDescriptors[(int)ReadSizedUnsigned(data, ref cursor, valueArg + 1)];            // VALUE_TYPE (arg 3)
+                case 0x19: case 0x1b: return dex.Fields[(int)ReadSizedUnsigned(data, ref cursor, valueArg + 1)];          // VALUE_FIELD / VALUE_ENUM (arg 3)
+                case 0x1a: return dex.Methods[(int)ReadSizedUnsigned(data, ref cursor, valueArg + 1)];                    // VALUE_METHOD (arg 3)
+                case 0x1e: return null;                                          // VALUE_NULL (arg 0, no bytes)
+                case 0x1f: return valueArg == 1 ? 1 : 0;                        // VALUE_BOOLEAN (arg 0/1, no bytes)
+                case 0x1c: case 0x1d: case 0x15: case 0x16:
+                    throw new FormatException("Unsupported encoded_value type 0x" + valueType.ToString("X2") + " in static_values (arrays/annotations/method-handles are not static field initializers).");
+                default:
+                    throw new FormatException("Invalid encoded_value type: 0x" + valueType.ToString("X2"));
+            }
+        }
+
+        /// <summary>Reads `size` little-endian bytes with sign extension from the
+        /// highest bit of the last byte (spec: signed value types).</summary>
+        private static long ReadSizedSigned(byte[] data, ref int cursor, int size)
+        {
+            long value = 0;
+            for (int i = 0; i < size; i++) value |= (long)data[cursor++] << (i * 8);
+            if (size < 8)
+            {
+                int signBit = (size * 8) - 1;
+                if ((value & (1L << signBit)) != 0)
+                    value |= ~((1L << (size * 8)) - 1);
+            }
+            return value;
+        }
+
+        /// <summary>Reads `size` little-endian bytes right-aligned WITHOUT sign
+        /// extension (spec: float/double right-extended encoding).</summary>
+        private static long ReadSizedUnsigned(byte[] data, ref int cursor, int size)
+        {
+            long value = 0;
+            for (int i = 0; i < size; i++) value |= (long)data[cursor++] << (i * 8);
+            return value;
         }
 
         private static DexEncodedMethod BuildEncodedMethod(byte[] data, DexFile dex, uint methodIdx, uint access, uint codeOff)

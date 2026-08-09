@@ -162,6 +162,31 @@ public sealed class StringContractTests
         return (state, registry, interpreter);
     }
 
+    [Fact]
+    public void Format_unboxes_boxed_primitive_arguments()
+    {
+        var (state, registry, _) = Session();
+        // %d with a boxed Integer (real Java varargs auto-boxes every primitive).
+        var intArgs = new DexArray("[Ljava/lang/Object;", 1);
+        intArgs.Set(0, state.BoxedObject("Ljava/lang/Integer;", 42));
+        Assert.Equal("value=42", Invoke(registry, state, StringClass, "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", AndroidInvokeKind.Static, "value=%d", intArgs));
+
+        // %f with a boxed Double.
+        var doubleArgs = new DexArray("[Ljava/lang/Object;", 1);
+        doubleArgs.Set(0, state.BoxedObject("Ljava/lang/Double;", 3.5));
+        Assert.Equal("3.5", Invoke(registry, state, StringClass, "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", AndroidInvokeKind.Static, "%f", doubleArgs));
+
+        // %s with a boxed Integer renders the REAL value ("42"), not a CLR type name.
+        var stringArgs = new DexArray("[Ljava/lang/Object;", 1);
+        stringArgs.Set(0, state.BoxedObject("Ljava/lang/Integer;", 42));
+        Assert.Equal("42", Invoke(registry, state, StringClass, "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", AndroidInvokeKind.Static, "%s", stringArgs));
+
+        // %x hex of a boxed Long.
+        var longArgs = new DexArray("[Ljava/lang/Object;", 1);
+        longArgs.Set(0, state.BoxedObject("Ljava/lang/Long;", 255L));
+        Assert.Equal("ff", Invoke(registry, state, StringClass, "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", AndroidInvokeKind.Static, "%x", longArgs));
+    }
+
     private static object Invoke(AndroidApiRegistry registry, AndroidFrameworkState state, string owner, string name, string descriptor, AndroidInvokeKind kind, params object[] args)
     {
         var api = new AndroidApiMethodId(owner, name, descriptor);

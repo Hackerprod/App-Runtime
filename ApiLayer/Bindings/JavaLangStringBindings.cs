@@ -359,15 +359,16 @@ internal static class JavaLangStringBindings
                 continue;
             }
             object? argument = varargs[argIndex++];
+            object numeric = NumericArgument(state, argument);
             string? rendered = conversion switch
             {
-                's' => argument?.ToString() ?? "null",
-                'd' => Convert.ToInt64(argument, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture),
-                'f' => JavaDouble(Convert.ToDouble(argument, CultureInfo.InvariantCulture)),
-                'x' => Convert.ToInt64(argument, CultureInfo.InvariantCulture).ToString("x", CultureInfo.InvariantCulture),
-                'X' => Convert.ToInt64(argument, CultureInfo.InvariantCulture).ToString("X", CultureInfo.InvariantCulture),
+                's' => ValueOfObject(state, argument),
+                'd' => Convert.ToInt64(numeric, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture),
+                'f' => JavaDouble(Convert.ToDouble(numeric, CultureInfo.InvariantCulture)),
+                'x' => Convert.ToInt64(numeric, CultureInfo.InvariantCulture).ToString("x", CultureInfo.InvariantCulture),
+                'X' => Convert.ToInt64(numeric, CultureInfo.InvariantCulture).ToString("X", CultureInfo.InvariantCulture),
                 'b' => argument is null || (argument is int zero && zero == 0) ? "false" : "true",
-                'c' => ((char)Convert.ToInt32(argument, CultureInfo.InvariantCulture)).ToString(),
+                'c' => ((char)Convert.ToInt32(numeric, CultureInfo.InvariantCulture)).ToString(),
                 _ => null
             };
             if (rendered is null)
@@ -377,8 +378,8 @@ internal static class JavaLangStringBindings
             }
             if (conversion == 'f' && precision >= 0)
             {
-                double numeric = Convert.ToDouble(argument, CultureInfo.InvariantCulture);
-                rendered = numeric.ToString("F" + precision, CultureInfo.InvariantCulture);
+                double numericDouble = Convert.ToDouble(numeric, CultureInfo.InvariantCulture);
+                rendered = numericDouble.ToString("F" + precision, CultureInfo.InvariantCulture);
             }
             else if (conversion == 's' && precision >= 0 && rendered.Length > precision)
             {
@@ -395,6 +396,13 @@ internal static class JavaLangStringBindings
 
     private static object?[] VarArgs(AndroidFrameworkState state, object value) =>
         value is DexArray array ? Enumerable.Range(0, array.Length).Select(array.Get).ToArray() : [];
+
+    /// <summary>Unboxes a boxed-primitive DexObject argument to its raw CLR
+    /// IConvertible value (int/long/double) for the numeric format specifiers;
+    /// non-DexObject arguments pass through unchanged (already-raw CLR values
+    /// keep working exactly as before — additive, not a rewrite).</summary>
+    private static object NumericArgument(AndroidFrameworkState state, object? argument) =>
+        argument is DexObject boxed && state.Boxed.TryGet(boxed, out var peer) ? peer.RawValue : argument!;
 
     private static string FromCharArray(AndroidFrameworkState state, DexArray array)
     {
@@ -441,10 +449,23 @@ internal static class JavaLangStringBindings
         if (value is DexObject guest && guest.TypeDescriptor == "Ljava/lang/StringBuilder;")
             return state.StringBuilders.Get(guest).ToString();
         // Real contract: obj.toString(). A guest object's toString resolves through
-        // the interpreter's virtual chain (guest override or bound Object.toString).
+        // the interpreter's virtual chain (guest override or bound Object.toString);
+        // a framework-typed object (e.g. a boxed primitive) falls back to the bound
+        // framework toString (Integer.toString etc. — registered in BoxingBindings).
         if (value is DexObject guestObject && state.Interpreter is not null)
         {
-            try { return state.Interpreter.InvokeVirtualInstanceExact(guestObject, "toString", "()Ljava/lang/String;") as string ?? guestObject.TypeDescriptor; }
+            try
+            {
+                return state.Interpreter.InvokeVirtualInstanceExact(guestObject, "toString", "()Ljava/lang/String;") as string ?? guestObject.TypeDescriptor;
+            }
+            catch (MissingMethodException)
+            {
+                try
+                {
+                    return state.Interpreter.InvokeFrameworkExact(guestObject.TypeDescriptor, "toString", "()Ljava/lang/String;", AndroidInvokeKind.Virtual, guestObject) as string ?? guestObject.TypeDescriptor;
+                }
+                catch (Exception) { return guestObject.TypeDescriptor; }
+            }
             catch (Exception) { return guestObject.TypeDescriptor; }
         }
         return value.ToString() ?? string.Empty;
