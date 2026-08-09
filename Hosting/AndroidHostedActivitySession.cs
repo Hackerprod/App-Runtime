@@ -55,23 +55,17 @@ public sealed class AndroidHostedActivitySession : IAsyncDisposable
     public IActivityWindow Window { get; }
     public AndroidApiTraceBuffer Trace { get; }
     public AndroidPeerCounts PeerCounts => _frameworkState is AndroidFrameworkState state ? state.PeerCounts : default;
-    public int ViewPeerCount => _androidState?.Ui?.PeerCount ?? 0;
     public Task Termination => _termination.Task;
     public bool IsTerminated => _termination.Task.IsCompletedSuccessfully;
 
     public ValueTask DisposeAsync() => new(BeginShutdown(closeWindow: true));
 
-    public Task<DexObject> FindViewByIdAsync(int resourceId) => _lane.InvokeAsync(
-        () => _androidState?.Ui?.FindViewById(resourceId) ?? throw new KeyNotFoundException($"Android View id 0x{resourceId:x8} was not found."),
-        CancellationToken.None);
-
-    public Task<bool> PerformClickAsync(int resourceId) => _lane.InvokeAsync(
-        () => _androidState?.Ui?.PerformClick(resourceId) ?? throw new InvalidOperationException("Android UI session is unavailable."),
-        CancellationToken.None);
-
-    public Task<AndroidUiFrame> RenderUiAsync(int pixelWidth, int pixelHeight, float density) => _lane.InvokeAsync(
-        () => _androidState?.Ui?.Render(pixelWidth, pixelHeight, density) ?? throw new InvalidOperationException("Android UI session is unavailable."),
-        CancellationToken.None);
+    // Phase 2: view operations (findViewById/performClick/render) now live on the
+    // IAndroidViewBridge owned by ViewRuntime; the hosted session exposes the
+    // bridge so host-side UI surfaces can forward inputs/frame requests. The
+    // previous local FindViewByIdAsync/PerformClickAsync/RenderUiAsync that
+    // manipulated the removed C# view hierarchy are gone.
+    public IAndroidViewBridge ViewBridge => _androidState?.ViewBridge ?? UnavailableAndroidViewBridge.Instance;
 
     private Task BeginShutdown(bool closeWindow)
     {
@@ -88,7 +82,7 @@ public sealed class AndroidHostedActivitySession : IAsyncDisposable
             if (Window is IDeferredActivityWindowClose deferred) deferred.CloseRequested -= _closeRequestedHandler;
             if (Window is IAndroidUiSurfaceHost uiSurface) uiSurface.Detach(this);
             if (_androidState is not null) _androidState.FinishRequested -= OnFinishRequested;
-            try { await _lane.InvokeAsync(() => { try { Session.Terminate(); return true; } finally { _androidState?.DisposeUi(); } }, CancellationToken.None).ConfigureAwait(false); }
+            try { await _lane.InvokeAsync(() => { try { Session.Terminate(); return true; } finally { _androidState?.ViewBridge.DisposeBridge(); } }, CancellationToken.None).ConfigureAwait(false); }
             catch (Exception error) { terminalError = error; }
             _androidState?.MarkDestroyed();
             CancelNoThrow();

@@ -226,8 +226,7 @@ public sealed class AndroidRuntimeServices
         IAndroidConnectivity? connectivity = null,
         IAndroidServiceAuditSink? serviceAudit = null,
         AndroidServiceLimits? serviceLimits = null,
-        IAndroidPower? power = null,
-        AndroidRuntime.Core.Ui.IAndroidTextMeasurer? textMeasurer = null)
+        IAndroidPower? power = null)
     {
         WindowFactory = windowFactory ?? throw new ArgumentNullException(nameof(windowFactory));
         LogSink = logSink ?? throw new ArgumentNullException(nameof(logSink));
@@ -249,7 +248,6 @@ public sealed class AndroidRuntimeServices
         ServiceAudit = serviceAudit ?? new NullAndroidServiceAuditSink();
         ServiceLimits = serviceLimits ?? AndroidServiceLimits.Default; ServiceLimits.Validate();
         Power = power ?? new UnavailableAndroidPower();
-        TextMeasurer = textMeasurer;
     }
 
     public IActivityWindowFactory WindowFactory { get; }
@@ -266,7 +264,6 @@ public sealed class AndroidRuntimeServices
     public IAndroidConnectivity Connectivity { get; }
     public IAndroidServiceAuditSink ServiceAudit { get; }
     public AndroidServiceLimits ServiceLimits { get; }
-    public AndroidRuntime.Core.Ui.IAndroidTextMeasurer? TextMeasurer { get; }
     public IAndroidPower Power { get; }
 
     public static AndroidRuntimeServices CreateHeadless() =>

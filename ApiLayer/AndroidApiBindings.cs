@@ -1,4 +1,4 @@
-#nullable disable
+﻿#nullable disable
 // NOTE: this file is a decompiled restoration of the original (see incident). Its
 // nullability annotations were lost in decompilation; nullable analysis is disabled
 // until the file is properly rewritten from the compiled behavior. Functionality is
@@ -475,7 +475,7 @@ public static class AndroidApiBindings
 		});
 		builder.Register(Api("Ljava/util/concurrent/CopyOnWriteArraySet;", "add", "(Ljava/lang/Object;)Z"), (AndroidApiInvocation _, object[] args) => state.CopyOnWriteArraySets.Get(Receiver(args)).Add(args[1]) ? 1 : 0);
 		// java.util.HashSet: same bounded HashSet<object?> peer semantics (no
-		// ordering guarantees, set semantics only) — shares the store so the
+		// ordering guarantees, set semantics only) â€” shares the store so the
 		// runtime's set behavior is uniform across both classes.
 		builder.Register(Api("Ljava/util/HashSet;", "<init>", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -559,7 +559,7 @@ public static class AndroidApiBindings
 		});
 		// java.util.Collection.toArray(T[]): SAME multi-peer-store dispatch as the
 		// sibling removeAll/remove/addAll bindings above (try each relevant store in
-		// turn via TryGet; throw only if none match — the precedent that prevents
+		// turn via TryGet; throw only if none match â€” the precedent that prevents
 		// the earlier CopyOnWriteArraySet regression). Real contract VERIFIED against
 		// the Java SE 17 Collection.toArray(T[]) docs:
 		//   - a.length >= size: elements are copied INTO a; if a.length > size, the
@@ -597,7 +597,7 @@ public static class AndroidApiBindings
 				return destination;
 			}
 			// Destination too small: allocate a NEW array of the SPECIFIED array's
-			// runtime type and the collection's size (real contract — e.g. passing
+			// runtime type and the collection's size (real contract â€” e.g. passing
 			// Integer[0] yields a new Integer[], which the caller then check-casts).
 			var fresh = new DexArray(destination is DexArray destDex ? destDex.ArrayDescriptor : "[Ljava/lang/Object;", elements.Count);
 			for (int index = 0; index < elements.Count; index++)
@@ -618,7 +618,7 @@ public static class AndroidApiBindings
 		{
 			RequireMainLane(invocation);
 			RequireActivity(state, Receiver(args));
-			RequireUi(state).SetContentView(RequireInt(args[1]));
+			state.ViewBridge.SetContentView(RequireInt(args[1]));
 			return null!;
 		});
 		builder.Register(Api("Landroid/view/LayoutInflater;", "from", "(Landroid/content/Context;)Landroid/view/LayoutInflater;"), delegate(AndroidApiInvocation invocation, object[] args)
@@ -630,20 +630,20 @@ public static class AndroidApiBindings
 		builder.Register(Api("Landroid/view/LayoutInflater;", "inflate", "(I)Landroid/view/View;"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			return RequireUi(state).Inflate(RequireInt(args[1]));
+			return state.ViewBridge.Inflate(RequireInt(args[1]));
 		});
 		builder.Register(Api("Landroid/view/LayoutInflater;", "inflate", "(ILandroid/view/ViewGroup;Z)Landroid/view/View;"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			return RequireUi(state).Inflate(RequireInt(args[1]));
+			return state.ViewBridge.Inflate(RequireInt(args[1]));
 		});
 		builder.Register(Api("Landroid/view/LayoutInflater;", "inflate", "(ILandroid/view/ViewGroup;)Landroid/view/View;"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			return RequireUi(state).Inflate(RequireInt(args[1]));
+			return state.ViewBridge.Inflate(RequireInt(args[1]));
 		});
 		// The runtime never installs a LayoutInflater.Factory (custom view inflation
-		// is a host-side concept here), so getFactory() legitimately returns null —
+		// is a host-side concept here), so getFactory() legitimately returns null â€”
 		// appcompat calls it defensively and falls back to its own path.
 		builder.Register(Api("Landroid/view/LayoutInflater;", "getFactory", "()Landroid/view/LayoutInflater$Factory;"), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -658,7 +658,7 @@ public static class AndroidApiBindings
 			return null!;
 		});
 		// appcompat night-mode plumbing: no night mode was ever configured, so the
-		// honest default is MODE_NIGHT_FOLLOW_SYSTEM (-1) — appcompat then uses the
+		// honest default is MODE_NIGHT_FOLLOW_SYSTEM (-1) â€” appcompat then uses the
 		// system setting, which the runtime reports as light mode.
 		builder.Register(Api("Landroidx/appcompat/app/AppCompatDelegateImpl;", "getDefaultNightMode", "()I"), delegate(AndroidApiInvocation _, object[] args)
 		{
@@ -769,7 +769,11 @@ public static class AndroidApiBindings
 		// static-field resolver). Removed from the monolith to avoid duplicate
 		// registration; see that file for the verified real contract.
 		RegisterResources(builder, state);
-		RegisterTypedArray(builder, state);
+		// Phase 2: the fake TypedArray facade is REMOVED â€” no local style/theme
+		// resolution. Real obtainStyledAttributes/TypedArray behavior is
+		// ViewRuntime's job; the bridge forwards those calls when attached and
+		// fails closed otherwise (UnavailableAndroidViewBridge throws).
+		RegisterStyledAttributes(builder, state);
 		// No service binding exists in this runtime: bindService honestly returns
 		// false (no connection established). The ServiceConnection is never invoked.
 		builder.Register(Api("Landroid/content/Context;", "bindService", "(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z"), delegate(AndroidApiInvocation invocation, object[] args)
@@ -783,7 +787,7 @@ public static class AndroidApiBindings
 		{
 			RequireMainLane(invocation);
 			RequireActivity(state, Receiver(args));
-			return RequireUi(state).FindViewById(RequireInt(args[1]));
+			return state.ViewBridge.FindViewById(RequireInt(args[1]));
 		});
 		// Activity.getWindow(): the stable per-session Window facade appcompat
 		// requires; the real content plumbing stays in the UI session.
@@ -797,7 +801,7 @@ public static class AndroidApiBindings
 		builder.Register(Api("Landroid/view/Window;", "setContentView", "(I)V"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			RequireUi(state).SetContentView(RequireInt(args[1]));
+			state.ViewBridge.SetContentView(RequireInt(args[1]));
 			return null!;
 		});
 		// Window.setContentView(View): the runtime content model is layout-resource
@@ -835,7 +839,7 @@ public static class AndroidApiBindings
 		builder.Register(Api("Landroid/view/Window;", "findViewById", "(I)Landroid/view/View;"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			return RequireUi(state).FindViewById(RequireInt(args[1]));
+			return state.ViewBridge.FindViewById(RequireInt(args[1]));
 		});
 		// Activity.getOnBackInvokedDispatcher(): stable facade; back navigation is
 		// host-driven, so the app can register but nothing is dispatched here.
@@ -879,45 +883,45 @@ public static class AndroidApiBindings
 		builder.Register(Api("Landroid/view/View;", "findViewById", "(I)Landroid/view/View;"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			return RequireUi(state).FindViewById(RequireInt(args[1]), Receiver(args));
+			return state.ViewBridge.FindViewById(RequireInt(args[1]), Receiver(args));
 		});
 		builder.Register(Api("Landroid/view/View;", "getId", "()I"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			return RequireUi(state).GetId(Receiver(args));
+			return state.ViewBridge.GetId(Receiver(args));
 		});
 		builder.Register(Api("Landroid/view/View;", "setEnabled", "(Z)V"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			RequireUi(state).SetEnabled(Receiver(args), RequireInt(args[1]) != 0);
+			state.ViewBridge.SetEnabled(Receiver(args), RequireInt(args[1]) != 0);
 			return null!;
 		});
 		builder.Register(Api("Landroid/view/View;", "isEnabled", "()Z"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			return RequireUi(state).IsEnabled(Receiver(args)) ? 1 : 0;
+			return state.ViewBridge.IsEnabled(Receiver(args)) ? 1 : 0;
 		});
 		builder.Register(Api("Landroid/view/View;", "setVisibility", "(I)V"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			RequireUi(state).SetVisibility(Receiver(args), RequireInt(args[1]));
+			state.ViewBridge.SetVisibility(Receiver(args), RequireInt(args[1]));
 			return null!;
 		});
 		builder.Register(Api("Landroid/view/View;", "getVisibility", "()I"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			return RequireUi(state).GetVisibility(Receiver(args));
+			return state.ViewBridge.GetVisibility(Receiver(args));
 		});
 		builder.Register(Api("Landroid/view/View;", "setOnClickListener", "(Landroid/view/View$OnClickListener;)V"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			RequireUi(state).SetOnClickListener(Receiver(args), OptionalDex(args[1]));
+			state.ViewBridge.SetOnClickListener(Receiver(args), OptionalDex(args[1]));
 			return null!;
 		});
 		builder.Register(Api("Landroid/view/View;", "performClick", "()Z"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			return RequireUi(state).PerformClick(Receiver(args)) ? 1 : 0;
+			return state.ViewBridge.PerformClick(Receiver(args)) ? 1 : 0;
 		});
 		// ViewGroup.removeAllViews: guest-side child mutation is not modeled; the
 		// runtime scene owns the tree, so the call is a documented no-op.
@@ -943,11 +947,12 @@ public static class AndroidApiBindings
 		{
 			return null!;
 		});
-		// View.isLaidOut(): views inflated on the execution lane are laid out
-		// (real semantics: true once measured/layout pass ran).
+		// View.isLaidOut()/getPadding*: view state is owned by ViewRuntime in
+		// Phase 2. Forward the queries through the bridge — no local hardcoded
+		// defaults (the old returns of 1/0 are removed with the C# view system).
 		builder.Register(Api("Landroid/view/View;", "isLaidOut", "()Z"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return 1;
+			return state.ViewBridge.IsLaidOut(Receiver(args)) ? 1 : 0;
 		});
 		// View.postOnAnimation(Runnable): runs on the next frame; here the main
 		// Looper queue (async like real Android's choreographer-posted runnable).
@@ -977,34 +982,33 @@ public static class AndroidApiBindings
 		{
 			return null!;
 		});
-		// View padding getters: padding is not modeled by the runtime layout
-		// engine, so reads answer 0 (honest neutral, avoids layout skew).
+		// View padding getters: forwarded to ViewRuntime (owns view state).
 		builder.Register(Api("Landroid/view/View;", "getPaddingLeft", "()I"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return 0;
+			return state.ViewBridge.GetPaddingLeft(Receiver(args));
 		});
 		builder.Register(Api("Landroid/view/View;", "getPaddingTop", "()I"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return 0;
+			return state.ViewBridge.GetPaddingTop(Receiver(args));
 		});
 		builder.Register(Api("Landroid/view/View;", "getPaddingRight", "()I"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return 0;
+			return state.ViewBridge.GetPaddingRight(Receiver(args));
 		});
 		builder.Register(Api("Landroid/view/View;", "getPaddingBottom", "()I"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return 0;
+			return state.ViewBridge.GetPaddingBottom(Receiver(args));
 		});
 		builder.Register(Api("Landroid/widget/TextView;", "setText", "(Ljava/lang/CharSequence;)V"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			RequireUi(state).SetText(Receiver(args), AsText(state, args[1]));
+			state.ViewBridge.SetText(Receiver(args), AsText(state, args[1]));
 			return null!;
 		});
 		builder.Register(Api("Landroid/widget/TextView;", "getText", "()Ljava/lang/CharSequence;"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			return RequireUi(state).GetText(Receiver(args));
+			return state.ViewBridge.GetText(Receiver(args));
 		});
 	}
 
@@ -1038,22 +1042,22 @@ public static class AndroidApiBindings
 			try { return unchecked((int)state.Resources.GetIdentifier(type, name)); }
 			catch (KeyNotFoundException) { return 0; }
 		});
-		// Resources.getConfiguration(): a fresh Configuration facade per call with
-		// honest neutral values for the host (portrait, density 2.0x/320dpi,
-		// fontScale 1.0, no dark mode, en-US locale). Guest reads of the public
-		// Configuration fields resolve through iget; keys use the same
-		// "Class->Name:Type" form the interpreter's FieldKey builds.
+		// Resources.getConfiguration(): a fresh Configuration facade per call whose
+		// values come from the SINGLE display-state source (AndroidFrameworkState.
+		// DisplayState, updated by the host from the real window and shared with
+		// ViewRuntime) — no independently-hardcoded resolution constants.
 		builder.Register(Api("Landroid/content/res/Resources;", "getConfiguration", "()Landroid/content/res/Configuration;"), delegate(AndroidApiInvocation _, object[] args)
 		{
+			AndroidDisplayState display = state.DisplayState;
 			var configuration = new DexObject("Landroid/content/res/Configuration;");
-			SetConfigField(configuration, "screenWidthDp", 360);
-			SetConfigField(configuration, "screenHeightDp", 640);
-			SetConfigField(configuration, "smallestScreenWidthDp", 360);
-			SetConfigField(configuration, "densityDpi", 320);
-			SetConfigField(configuration, "orientation", 1);
-			SetConfigField(configuration, "screenLayout", 0x20);
-			SetConfigField(configuration, "uiMode", 0x11);
-			SetConfigField(configuration, "fontScale", 1.0f);
+			SetConfigField(configuration, "screenWidthDp", display.ScreenWidthDp);
+			SetConfigField(configuration, "screenHeightDp", display.ScreenHeightDp);
+			SetConfigField(configuration, "smallestScreenWidthDp", display.ScreenWidthDp);
+			SetConfigField(configuration, "densityDpi", display.DensityDpi);
+			SetConfigField(configuration, "orientation", display.Orientation);
+			SetConfigField(configuration, "screenLayout", display.ScreenLayout);
+			SetConfigField(configuration, "uiMode", display.UiMode);
+			SetConfigField(configuration, "fontScale", display.FontScale);
 			SetConfigField(configuration, "mcc", 0);
 			SetConfigField(configuration, "mnc", 0);
 			var locale = new DexObject("Ljava/util/Locale;");
@@ -1082,102 +1086,90 @@ public static class AndroidApiBindings
 		return state.Resources.Resolve(unchecked((uint)id));
 	}
 
-	private static void RegisterTypedArray(AndroidApiRegistryBuilder builder, AndroidFrameworkState state)
+	private static void RegisterStyledAttributes(AndroidApiRegistryBuilder builder, AndroidFrameworkState state)
 	{
-		// Context.obtainStyledAttributes: appcompat calls this during theme setup;
-		// the runtime's native inflater does not consume styled attributes, so a
-		// stable empty TypedArray facade lets the dex continue (getIndexCount == 0
-		// means no attribute loop runs).
+		// Phase 2: style/theme resolution moved entirely to ViewRuntime. These
+		// bindings exist so guest bytecode still resolves a method; the actual
+		// resolution forwards through the view bridge (which owns TypedArray
+		// semantics) and fails closed when no bridge is attached. No local fake.
 		builder.Register(Api("Landroid/content/Context;", "obtainStyledAttributes", "(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			return state.TypedArrayObject;
+			return state.ViewBridge.ObtainStyledAttributes();
 		});
 		builder.Register(Api("Landroid/content/Context;", "obtainStyledAttributes", "(I[I)Landroid/content/res/TypedArray;"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			return state.TypedArrayObject;
+			return state.ViewBridge.ObtainStyledAttributes();
 		});
 		builder.Register(Api("Landroid/content/Context;", "obtainStyledAttributes", "([I)Landroid/content/res/TypedArray;"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			return state.TypedArrayObject;
+			return state.ViewBridge.ObtainStyledAttributes();
 		});
 		builder.Register(Api("Landroid/content/res/TypedArray;", "getIndexCount", "()I"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			// One pseudo-attribute: appcompat's createSubDecor requires a valid
-			// AppCompat theme and iterates typed attributes; a single index lets
-			// the loop run without inventing values.
-			return 1;
+			return state.ViewBridge.TypedArrayGetIndexCount();
 		});
 		builder.Register(Api("Landroid/content/res/TypedArray;", "recycle", "()V"), delegate(AndroidApiInvocation _, object[] args)
 		{
 			return null!;
 		});
-		// hasValue: an app hosting AppCompatActivity must declare a Theme.AppCompat
-		// descendant, so the appcompat theme probe legitimately reports values.
 		builder.Register(Api("Landroid/content/res/TypedArray;", "hasValue", "(I)Z"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return 1;
+			return state.ViewBridge.TypedArrayHasValue(RequireInt(args[1])) ? 1 : 0;
 		});
-		// Defensive reads on an empty TypedArray return the default argument
-		// (index -1 / not present), which is what a zero-length array produces.
 		builder.Register(Api("Landroid/content/res/TypedArray;", "getString", "(I)Ljava/lang/String;"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return null!;
+			return state.ViewBridge.TypedArrayGetString(RequireInt(args[1]));
 		});
 		builder.Register(Api("Landroid/content/res/TypedArray;", "getText", "(I)Ljava/lang/CharSequence;"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return null!;
+			return state.ViewBridge.TypedArrayGetString(RequireInt(args[1]));
 		});
 		builder.Register(Api("Landroid/content/res/TypedArray;", "getColor", "(II)I"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return RequireInt(args[2]);
+			return state.ViewBridge.TypedArrayGetColor(RequireInt(args[1]), RequireInt(args[2]));
 		});
 		builder.Register(Api("Landroid/content/res/TypedArray;", "getColorStateList", "(I)Landroid/content/res/ColorStateList;"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return null!;
+			return state.ViewBridge.TypedArrayGetColorStateList(RequireInt(args[1]));
 		});
 		builder.Register(Api("Landroid/content/res/TypedArray;", "getDimension", "(IF)F"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return (float)RequireInt(args[2]);
+			return state.ViewBridge.TypedArrayGetDimension(RequireInt(args[1]), RequireFloat(args[2]));
 		});
 		builder.Register(Api("Landroid/content/res/TypedArray;", "getInt", "(II)I"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return RequireInt(args[2]);
+			return state.ViewBridge.TypedArrayGetInt(RequireInt(args[1]), RequireInt(args[2]));
 		});
 		builder.Register(Api("Landroid/content/res/TypedArray;", "getResourceId", "(II)I"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return RequireInt(args[2]);
+			return state.ViewBridge.TypedArrayGetResourceId(RequireInt(args[1]), RequireInt(args[2]));
 		});
 		builder.Register(Api("Landroid/content/res/TypedArray;", "getBoolean", "(IZ)Z"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			// A hosted AppCompatActivity declares Theme.AppCompat, whose window
-			// flags (windowActionBar etc.) are true; appcompat rejects a theme
-			// where every flag is false. Report true for the theme feature probe.
-			return 1;
+			return state.ViewBridge.TypedArrayGetBoolean(RequireInt(args[1]), RequireInt(args[2]) != 0) ? 1 : 0;
 		});
 		builder.Register(Api("Landroid/content/res/TypedArray;", "getFloat", "(IF)F"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return (float)RequireInt(args[2]);
+			return state.ViewBridge.TypedArrayGetFloat(RequireInt(args[1]), RequireFloat(args[2]));
 		});
 		builder.Register(Api("Landroid/content/res/TypedArray;", "getDimensionPixelSize", "(II)I"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return RequireInt(args[2]);
+			return state.ViewBridge.TypedArrayGetDimensionPixelSize(RequireInt(args[1]), RequireInt(args[2]));
 		});
 		builder.Register(Api("Landroid/content/res/TypedArray;", "getDimensionPixelOffset", "(II)I"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return RequireInt(args[2]);
+			return state.ViewBridge.TypedArrayGetDimensionPixelOffset(RequireInt(args[1]), RequireInt(args[2]));
 		});
 		builder.Register(Api("Landroid/content/res/TypedArray;", "getIndex", "(I)I"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return 0;
+			return state.ViewBridge.TypedArrayGetIndex(RequireInt(args[1]));
 		});
-		// getValue: the facade TypedArray carries no typed values, so reads are
-		// false (nothing stored) and the out-param is left untouched.
 		builder.Register(Api("Landroid/content/res/TypedArray;", "getValue", "(ILandroid/util/TypedValue;)Z"), delegate(AndroidApiInvocation _, object[] args)
 		{
-			return 0;
+			return state.ViewBridge.TypedArrayGetValue(RequireInt(args[1])) ? 1 : 0;
 		});
 		// android.util.TypedValue: constructed by ContentFrameLayout to read theme
 		// min sizes; the runtime does not consume typed values further.
@@ -1482,7 +1474,7 @@ public static class AndroidApiBindings
 			});
 			return null!;
 		});
-		// Intent(Context, Class) — the explicit-component constructor. The component
+		// Intent(Context, Class) â€” the explicit-component constructor. The component
 		// target is retained so getComponent/setClass-style flows behave; the runtime
 		// does not navigate guest activities (single-activity model), so the Class
 		// arg is recorded but only the intent itself is materialized.
@@ -1768,9 +1760,9 @@ public static class AndroidApiBindings
 		return (value == null) ? null : RequireDex(value);
 	}
 
-	private static AndroidUiSession RequireUi(AndroidFrameworkState state)
+	private static IAndroidViewBridge RequireUi(AndroidFrameworkState state)
 	{
-		return state.Ui ?? throw new AndroidApiUnavailableException(new AndroidApiMethodId("Landroid/app/Activity;", "setContentView", "(I)V"), "APK resource/UI session is unavailable.");
+		return state.ViewBridge;
 	}
 
 	internal static string RequireString(object value, bool allowNull = false)
@@ -1785,6 +1777,17 @@ public static class AndroidApiBindings
 			obj = null;
 		}
 		return (string)obj;
+	}
+
+	internal static float RequireFloat(object value)
+	{
+		return value switch
+		{
+			float number => number,
+			int integer => integer,
+			bool boolean => boolean ? 1f : 0f,
+			_ => throw new ArgumentException("Expected float.")
+		};
 	}
 
 	internal static int RequireInt(object value)

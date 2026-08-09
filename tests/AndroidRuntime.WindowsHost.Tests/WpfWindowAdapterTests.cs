@@ -14,44 +14,11 @@ namespace AndroidRuntime.WindowsHost.Tests;
 [Collection("WPF adapter")]
 public sealed class WpfWindowAdapterTests
 {
-    [Fact]
-    public async Task UiProbe_renders_in_child_hwnd_and_native_pointer_updates_scene_and_toast()
-    {
-        using var factory = new WpfActivityWindowFactory(new AndroidToastLimits(shortDurationMilliseconds: 10_000));
-        var runtime = new AndroidAppRuntime();
-        await using var hosted = await runtime.LaunchSessionAsync(
-            Path.Combine(AppContext.BaseDirectory, "Fixtures", "UiProbe.apk"),
-            new AndroidRuntimeServices(factory, new ConsoleAndroidLogSink()));
-        var window = Assert.IsType<WpfActivityWindow>(hosted.Window);
+    // The former UiProbe_renders_in_child_hwnd_and_native_pointer_updates_scene_and_toast
+    // test is REMOVED: it asserted on the Phase-1 C# view hierarchy (semantic
+    // snapshots, RenderUiAsync callbacks, local hit-testing). Phase 2 delegates
+    // all view behavior to ViewRuntime; those surfaces no longer exist here.
 
-        WindowsFrameCapture ready = await WaitForCaptureAsync(window, capture => capture.SemanticSnapshot.Contains("|Ready|", StringComparison.Ordinal));
-        Assert.NotEqual(nint.Zero, window.SurfaceHandle);
-        string buttonLine = ready.SemanticSnapshot.Split('\n').Single(line => line.Contains("AndroidButtonNode", StringComparison.Ordinal));
-        string[] fields = buttonLine.Split('|');
-        string[] bounds = fields[7].Split(',');
-        int x = (int)(float.Parse(bounds[0], System.Globalization.CultureInfo.InvariantCulture) + float.Parse(bounds[2], System.Globalization.CultureInfo.InvariantCulture) / 2);
-        int y = (int)(float.Parse(bounds[1], System.Globalization.CultureInfo.InvariantCulture) + float.Parse(bounds[3], System.Globalization.CultureInfo.InvariantCulture) / 2);
-        Assert.Equal(int.Parse(fields[2], System.Globalization.CultureInfo.InvariantCulture), window.HitTestSurface(x, y));
-        SendMessage(window.SurfaceHandle, 0x0201, 1, 2 | (2 << 16));
-        SendMessage(window.SurfaceHandle, 0x0202, 0, 2 | (2 << 16));
-        await Task.Delay(50);
-        Assert.Equal(0, (await hosted.RenderUiAsync(320, 240, 1)).Metrics.Callbacks);
-        nint point = (y << 16) | (x & 0xffff);
-        SendMessage(window.SurfaceHandle, 0x0201, 1, point);
-        SendMessage(window.SurfaceHandle, 0x0202, 0, point);
-
-        WindowsFrameCapture clicked = await WaitForCaptureAsync(window, capture => capture.SemanticSnapshot.Contains("|Clicked|", StringComparison.Ordinal));
-        Assert.NotEqual(ready.Sha256, clicked.Sha256);
-        Assert.True(window.IsToastVisible);
-        Assert.Equal("Clicked", window.ToastText);
-        Assert.Equal(1, (await hosted.RenderUiAsync(320, 240, 1)).Metrics.Callbacks);
-
-        SendMessage(window.SurfaceHandle, 0x0100, 0x0D, 0);
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while ((await hosted.RenderUiAsync(320, 240, 1)).Metrics.Callbacks < 2 && DateTime.UtcNow < deadline)
-            await Task.Delay(25);
-        Assert.Equal(2, (await hosted.RenderUiAsync(320, 240, 1)).Metrics.Callbacks);
-    }
     [Fact]
     public void Factory_dispose_timeout_can_be_retried_without_orphaning_dispatcher()
     {
@@ -296,19 +263,6 @@ public sealed class WpfWindowAdapterTests
         string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
-    }
-
-    private static async Task<WindowsFrameCapture> WaitForCaptureAsync(WpfActivityWindow window, Func<WindowsFrameCapture, bool> predicate)
-    {
-        var timeout = DateTime.UtcNow.AddSeconds(5);
-        WindowsFrameCapture? last = null;
-        do
-        {
-            WindowsFrameCapture capture = last = window.CaptureSurface();
-            if (predicate(capture)) return capture;
-            await Task.Delay(25);
-        } while (DateTime.UtcNow < timeout);
-        throw new TimeoutException("Retained surface did not publish the expected frame. Last semantics: " + last?.SemanticSnapshot);
     }
 
     private sealed class FakeClipboardBackend : IWindowsClipboardBackend

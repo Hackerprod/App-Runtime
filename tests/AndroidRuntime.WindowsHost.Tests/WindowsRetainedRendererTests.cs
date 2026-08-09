@@ -1,8 +1,12 @@
-using AndroidRuntime.Core.Ui;
 using AndroidRuntime.WindowsHost;
 
 namespace AndroidRuntime.WindowsHost.Tests;
 
+/// <summary>
+/// Phase-2 presentation-shim tests: the renderer no longer interprets display
+/// lists (that moved to ViewRuntime); it holds a finished BGRA buffer and
+/// presents/captures it. Scheduler revision logic is unchanged.
+/// </summary>
 public sealed class WindowsRetainedRendererTests
 {
     [Fact]
@@ -12,9 +16,9 @@ public sealed class WindowsRetainedRendererTests
         var rendered = new List<long>();
         using var scheduler = new RetainedFrameScheduler(action => posted.Enqueue(action), frame => rendered.Add(frame.Revision));
 
-        scheduler.Publish(Frame(1, "one"));
-        scheduler.Publish(Frame(2, "two"));
-        scheduler.Publish(Frame(1, "stale"));
+        scheduler.Publish(Frame(1));
+        scheduler.Publish(Frame(2));
+        scheduler.Publish(Frame(1));
 
         Assert.Single(posted);
         posted.Dequeue()();
@@ -28,40 +32,36 @@ public sealed class WindowsRetainedRendererTests
     {
         using var renderer = new WindowsRetainedRenderer();
         renderer.Resize(320, 240, 1f);
-        renderer.Render(Frame(1, "Ready"));
+        renderer.Render(Frame(1, fill: 0x10));
 
         WindowsFrameCapture first = renderer.Capture();
         WindowsFrameCapture second = renderer.Capture();
         Assert.Equal(first.Sha256, second.Sha256);
         Assert.Null(first.FirstMismatch(second));
 
-        renderer.Render(Frame(2, "Clicked"));
+        renderer.Render(Frame(2, fill: 0x20));
         WindowsFrameCapture changed = renderer.Capture();
         Assert.NotNull(first.FirstMismatch(changed));
     }
 
-    [Theory]
-    [InlineData(1.0f)]
-    [InlineData(1.25f)]
-    [InlineData(1.5f)]
-    public void Hit_test_uses_logical_coordinates_at_supported_dpi(float density)
+    [Fact]
+    public void Capture_without_frame_reports_empty_surface_not_stale_data()
     {
         using var renderer = new WindowsRetainedRenderer();
-        renderer.Resize((int)(320 * density), (int)(240 * density), density);
-        renderer.Render(Frame(1, "Ready"));
+        renderer.Resize(64, 64, 1f);
 
-        Assert.Equal(42, renderer.HitTest(50 * density, 45 * density));
-        Assert.Null(renderer.HitTest(5 * density, 5 * density));
+        WindowsFrameCapture capture = renderer.Capture();
+        Assert.Equal(0, capture.Revision);
+        Assert.Equal(64, capture.Width);
+        Assert.Equal(64, capture.Height);
+        Assert.All(capture.Bgra, channel => Assert.Equal(0, channel));
     }
 
-    private static WindowsRetainedFrame Frame(long revision, string text) => new(
+    private static WindowsRetainedFrame Frame(long revision, byte fill = 0) => new(
         revision,
         320,
         240,
         1,
-        [
-            new AndroidFillRectCommand(new AndroidRect(20, 20, 100, 50), new AndroidColor(255, 35, 91, 180), 42),
-            new AndroidDrawTextCommand(new AndroidRect(20, 20, 100, 50), text, 18, new AndroidColor(255, 255, 255, 255), 42)
-        ],
-        $"button|42|{text}");
+        Enumerable.Repeat(fill, 320 * 240 * 4).ToArray(),
+        string.Empty);
 }

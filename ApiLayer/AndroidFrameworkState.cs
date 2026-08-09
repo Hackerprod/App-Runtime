@@ -127,8 +127,7 @@ public sealed class AndroidFrameworkState : IDisposable
         int targetSdkVersion = 1,
         IAndroidPower? power = null,
         AndroidResourceResolver? resources = null,
-        AndroidUiLimits? uiLimits = null,
-        AndroidRuntime.Core.Ui.IAndroidTextMeasurer? textMeasurer = null)
+        IAndroidViewBridge? viewBridge = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         SessionId = sessionId;
@@ -151,8 +150,9 @@ public sealed class AndroidFrameworkState : IDisposable
         ServiceLimits = serviceLimits ?? AndroidServiceLimits.Default; ServiceLimits.Validate();
         TargetSdkVersion = targetSdkVersion;
         Power = power ?? new UnavailableAndroidPower();
-        Ui = resources is null ? null : new AndroidUiSession(resources, uiLimits ?? new AndroidUiLimits(), PeerLimits.Views, textMeasurer);
+        ViewBridge = viewBridge ?? UnavailableAndroidViewBridge.Instance;
         Resources = resources;
+        DisplayState = AndroidDisplayState.Default;
         StringBuilders = new AndroidPeerStore<StringBuilder>("StringBuilder", PeerLimits.StringBuilders);
         Bundles = new AndroidPeerStore<BundlePeer>("Bundle", PeerLimits.Bundles);
         Intents = new AndroidPeerStore<IntentPeer>("Intent", PeerLimits.Intents);
@@ -186,7 +186,6 @@ public sealed class AndroidFrameworkState : IDisposable
         SharedPreferencesEditors = new AndroidPeerStore<SharedPreferencesEditorPeer>("SharedPreferences.Editor", PeerLimits.SharedPreferencesEditors);
         ApplicationContext = new DexObject("Landroid/app/Application;");
         LauncherIntent = new DexObject("Landroid/content/Intent;");
-        TypedArrayObject = new DexObject("Landroid/content/res/TypedArray;");
         Intents.Add(LauncherIntent, new IntentPeer { Action = "android.intent.action.MAIN" });
         InitializeTimeUnitConstants();
     }
@@ -197,7 +196,6 @@ public sealed class AndroidFrameworkState : IDisposable
     public int MinimumLogPriority { get; }
     public DexObject ApplicationContext { get; }
     public DexObject LauncherIntent { get; }
-    public DexObject TypedArrayObject { get; }
     public AndroidToastLimits ToastLimits { get; }
     public AndroidPeerLimits PeerLimits { get; }
     public IAndroidClock Clock { get; }
@@ -210,7 +208,15 @@ public sealed class AndroidFrameworkState : IDisposable
     internal AndroidServiceLimits ServiceLimits { get; }
     internal int TargetSdkVersion { get; }
     internal IAndroidPower Power { get; }
-    internal AndroidUiSession? Ui { get; }
+    /// <summary>The Phase-2 view bridge: this side's ONLY path to view
+    /// hierarchy/measure/layout/style/paint behavior, owned by ViewRuntime.
+    /// Bindings forward view calls here; when no bridge is attached the
+    /// unavailable implementation fails closed (no local visual behavior).</summary>
+    internal IAndroidViewBridge ViewBridge { get; }
+    /// <summary>The single source of truth for display metrics queried by guest
+    /// code (Configuration/DisplayMetrics/WindowManager). The host updates this
+    /// from the real window size/density; ViewRuntime renders at the same state.</summary>
+    internal AndroidDisplayState DisplayState { get; set; }
     internal AndroidSystemServiceRegistry? SystemServices { get; set; }
     public AndroidPeerCounts PeerCounts => new(StringBuilders.Count, Bundles.Count, Intents.Count, Toasts.Count);
     internal bool IsFinishing => Volatile.Read(ref _finishing) != 0;
@@ -375,12 +381,6 @@ public sealed class AndroidFrameworkState : IDisposable
         if (Activity is not null && !ReferenceEquals(Activity, activity))
             throw new InvalidOperationException("Framework session already has an Activity.");
         Activity = activity;
-    }
-
-    internal void AttachUiInterpreter(DexInterpreter interpreter)
-    {
-        if (Ui is null || Activity is null) return;
-        Ui.Attach(Activity, interpreter);
     }
 
     internal void AttachInterpreter(DexInterpreter interpreter)
@@ -667,12 +667,9 @@ public sealed class AndroidFrameworkState : IDisposable
         return looper;
     }
 
-    internal void DisposeUi() => Ui?.Dispose();
-
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        Ui?.Dispose();
         Toasts.Clear();
         Intents.Clear();
         Bundles.Clear();

@@ -118,9 +118,7 @@ public sealed class AndroidAppRuntime
                     services.ServiceLimits,
                     manifest.TargetSdkVersion,
                     services.Power,
-                    resources,
-                    null,
-                    services.TextMeasurer);
+                    resources);
                 var registry = AndroidApiBindings.CreateBuilder(frameworkState, services.LogSink).Build();
                 var interpreter = new DexInterpreter(dexSet, registry, apiSession: apiContext, gil: lane.Gil);
                 interpreter.StaticFieldMissDiagnostic = message => Console.Error.WriteLine("[DEX] " + message);
@@ -130,7 +128,6 @@ public sealed class AndroidAppRuntime
                 JavaLangThreadBindings.InitializeMainGuestThread(frameworkState);
                 var activity = interpreter.ConstructInstance(manifest.LauncherActivityDescriptor);
                 frameworkState.AttachActivity(activity);
-                frameworkState.AttachUiInterpreter(interpreter);
                 window = services.WindowFactory.Create(
                     sessionId,
                     manifest.PackageName,
@@ -197,9 +194,7 @@ public sealed class AndroidAppRuntime
             services.ServiceLimits,
             manifest.TargetSdkVersion,
             services.Power,
-            resources,
-            null,
-            services.TextMeasurer);
+            resources);
         var registry = AndroidApiBindings.CreateBuilder(frameworkState, services.LogSink).Build();
         var interpreter = new DexInterpreter(dexSet, registry, apiSession: apiContext);
         interpreter.StaticFieldMissDiagnostic = message => Console.Error.WriteLine("[DEX] " + message);
@@ -208,7 +203,6 @@ public sealed class AndroidAppRuntime
         JavaLangThreadBindings.InitializeMainGuestThread(frameworkState);
         var activity = interpreter.ConstructInstance(manifest.LauncherActivityDescriptor);
         frameworkState.AttachActivity(activity);
-        frameworkState.AttachUiInterpreter(interpreter);
         var window = services.WindowFactory.Create(
             sessionId,
             manifest.PackageName,

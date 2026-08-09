@@ -1,15 +1,14 @@
 using System.Buffers.Binary;
 using System.IO;
-using AndroidRuntime.Core.Ui;
 using AndroidRuntime.WindowsHost;
 
 namespace AndroidRuntime.WindowsHost.Tests;
 
 /// <summary>
-/// Tests for the ViewRuntime integration: the BGRA32 top-down BMP writer and
-/// the native rasterizer path in WindowsRetainedRenderer (when the DLL is
-/// available). The BMP test is deterministic; the native-render test asserts
-/// the frame is a real, non-trivial BGRA buffer (not the plain background).
+/// Phase-2 presentation-tooling test: the BGRA32 top-down BMP writer is the
+/// capture/presentation utility that survives (it writes ViewRuntime's finished
+/// pixel buffer to disk). The old native-rasterizer test is REMOVED along with
+/// the Phase-1 command-interpretation path — this side no longer rasterizes.
 /// </summary>
 public sealed class ViewRuntimeIntegrationTests
 {
@@ -50,34 +49,4 @@ public sealed class ViewRuntimeIntegrationTests
             if (File.Exists(path)) File.Delete(path);
         }
     }
-
-    [Fact]
-    public void Native_rasterizer_renders_a_non_trivial_frame_when_dll_is_available()
-    {
-        using var renderer = new WindowsRetainedRenderer();
-        renderer.Resize(320, 240, 1f);
-        renderer.Render(Frame(1, "Ready"));
-
-        WindowsFrameCapture capture = renderer.Capture();
-        Assert.True(capture.Width == 320 && capture.Height == 240);
-        Assert.True(capture.Bgra.Length == 320 * 240 * 4);
-
-        // The frame must NOT be the plain uniform background: count distinct
-        // 32-bit pixel values; a real render has the fill rect + text regions.
-        var seen = new HashSet<uint>();
-        for (int i = 0; i + 3 < capture.Bgra.Length; i += 4)
-            seen.Add(BitConverter.ToUInt32(capture.Bgra, i));
-        Assert.True(seen.Count >= 2, $"expected a non-trivial frame, saw {seen.Count} distinct pixel values");
-    }
-
-    private static WindowsRetainedFrame Frame(long revision, string text) => new(
-        revision,
-        320,
-        240,
-        1,
-        [
-            new AndroidFillRectCommand(new AndroidRect(20, 20, 100, 50), new AndroidColor(255, 35, 91, 180), 42),
-            new AndroidDrawTextCommand(new AndroidRect(20, 20, 100, 50), text, 18, new AndroidColor(255, 255, 255, 255), 42)
-        ],
-        $"button|42|{text}");
 }

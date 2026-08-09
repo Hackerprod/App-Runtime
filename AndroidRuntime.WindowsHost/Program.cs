@@ -45,13 +45,9 @@ public static class Program
         var connectivity = new WindowsConnectivityAdapter();
         var logs = new ConsoleAndroidLogSink();
         var runtime = new AndroidAppRuntime();
-        // Host-injected ViewRuntime-backed text measurer: layout and paint then
-        // agree on real glyph widths. Falls back to the deterministic stub if the
-        // native DLL is unavailable.
-        using var textMeasurer = new ViewRuntimeTextMeasurer();
         await using var hosted = await runtime.LaunchSessionAsync(
             traceOutput.ApkStream,
-            new AndroidRuntimeServices(factory, logs, traceCapacity: 4096, clock: new WindowsAndroidClock(), capabilityPolicy: new AndroidCapabilityPolicy(options.Grants), clipboard: clipboard, connectivity: connectivity, power: new WindowsPowerAdapter(), textMeasurer: textMeasurer));
+            new AndroidRuntimeServices(factory, logs, traceCapacity: 4096, clock: new WindowsAndroidClock(), capabilityPolicy: new AndroidCapabilityPolicy(options.Grants), clipboard: clipboard, connectivity: connectivity, power: new WindowsPowerAdapter()));
         Console.WriteLine($"READY hwnd={hosted.Window.Handle} title={hosted.Window.Title}");
 
         if (options.CaptureFramePath is string capturePath)

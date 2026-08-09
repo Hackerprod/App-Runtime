@@ -6,6 +6,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using AndroidRuntime.Core;
+using AndroidRuntime.Core.Dex;
 using AndroidRuntime.Core.Hosting;
 
 namespace AndroidRuntime.WindowsHost;
@@ -38,12 +39,12 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
     internal nint SurfaceHandle => _hwnd;
     internal RetainedFrameSchedulerMetrics SchedulerMetrics => _scheduler.Metrics;
     internal WindowsFrameCapture Capture() => _renderer.Capture();
-    internal int? HitTest(float pixelX, float pixelY) => _renderer.HitTest(pixelX, pixelY);
+    internal int? HitTest(float pixelX, float pixelY) => _session?.ViewBridge.HitTest(pixelX, pixelY);
     internal void InjectPointerClick(float pixelX, float pixelY)
     {
         if (!InputEnabled) return;
-        int? pressed = _renderer.HitTest(pixelX, pixelY);
-        int? released = _renderer.HitTest(pixelX, pixelY);
+        int? pressed = _session?.ViewBridge.HitTest(pixelX, pixelY);
+        int? released = _session?.ViewBridge.HitTest(pixelX, pixelY);
         if (pressed is int id && released == pressed) { _focusedId = id; EnqueueClick(id); }
     }
     internal void Attach(AndroidHostedActivitySession session) { _session = session ?? throw new ArgumentNullException(nameof(session)); RequestFrame(); }
@@ -72,13 +73,13 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
             case WmLButtonDown:
                 if (!InputEnabled) break;
                 Native.SetFocus(hwnd); Native.SetCapture(hwnd);
-                _pressedId = _renderer.HitTest(SignedLow(lParam), SignedHigh(lParam));
+                _pressedId = _session?.ViewBridge.HitTest(SignedLow(lParam), SignedHigh(lParam));
                 _focusedId = _pressedId;
                 handled = true; return 0;
             case WmLButtonUp:
                 if (!InputEnabled) break;
                 Native.ReleaseCapture();
-                int? released = _renderer.HitTest(SignedLow(lParam), SignedHigh(lParam));
+                int? released = _session?.ViewBridge.HitTest(SignedLow(lParam), SignedHigh(lParam));
                 int? invoke = released == _pressedId ? released : null; _pressedId = null;
                 if (invoke is int id) EnqueueClick(id);
                 handled = true; return 0;
@@ -97,7 +98,11 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
         if (session is null) return;
         _ = Task.Run(async () =>
         {
-            try { if (await session.PerformClickAsync(id).ConfigureAwait(false)) RequestFrame(); }
+            try
+            {
+                DexObject? view = session.ViewBridge.FindViewById(id);
+                if (view is not null && session.ViewBridge.PerformClick(view)) RequestFrame();
+            }
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) when (!InputEnabled) { }
         });
@@ -117,8 +122,11 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
         {
             try
             {
-                var frame = await session.RenderUiAsync(pixelWidth, pixelHeight, density).ConfigureAwait(false);
-                _scheduler.Publish(WindowsRetainedFrame.From(frame, Interlocked.Increment(ref _revision), pixelWidth, pixelHeight, density));
+                // Phase 2: ViewRuntime renders the whole frame; this side just
+                // presents the finished buffer. No bridge attached -> no frame.
+                byte[]? pixels = session.ViewBridge.RenderFrame(pixelWidth, pixelHeight, density);
+                if (pixels is not null)
+                    _scheduler.Publish(new WindowsRetainedFrame(Interlocked.Increment(ref _revision), pixelWidth, pixelHeight, density, pixels, string.Empty));
             }
             catch (InvalidOperationException) when (session.Session.State != AndroidActivityState.Resumed) { }
             catch (ObjectDisposedException) { }

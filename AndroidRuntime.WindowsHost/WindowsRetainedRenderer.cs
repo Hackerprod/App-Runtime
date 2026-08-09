@@ -1,25 +1,20 @@
 #nullable enable
-using System.Collections.ObjectModel;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
-using AndroidRuntime.Core.Ui;
 
 namespace AndroidRuntime.WindowsHost;
 
-/// <summary>Immutable, revision-bound transfer object published by the Android lane.</summary>
+/// <summary>Immutable transfer object for a finished rendered frame. Phase 2:
+/// ViewRuntime owns the entire frame; this side only carries the completed
+/// pixel buffer and presents it. There is no display-list interpretation here.</summary>
 internal sealed record WindowsRetainedFrame(
     long Revision,
     int PixelWidth,
     int PixelHeight,
     float Density,
-    IReadOnlyList<AndroidDrawCommand> Commands,
+    byte[] Bgra,
     string SemanticSnapshot)
 {
-    internal static WindowsRetainedFrame From(AndroidUiFrame frame, long revision, int width, int height, float density) =>
-        new(revision,
-            width, height, density,
-            new ReadOnlyCollection<AndroidDrawCommand>(frame.DisplayList.Commands.ToArray()),
-            frame.SemanticSnapshot);
 }
 
 internal readonly record struct RetainedFrameSchedulerMetrics(long PublishedFrames, long RenderedFrames, long StaleFramesDropped, long CoalescedFrames);
@@ -90,8 +85,11 @@ internal sealed record WindowsFrameCapture(int Width, int Height, byte[] Bgra, s
 internal readonly record struct WindowsPixelMismatch(int X, int Y, uint ExpectedBgra, uint ActualBgra);
 
 /// <summary>
-/// Retained Windows backend with a deterministic BGRA DIB. The same backing bitmap is used for
-/// capture and presentation, avoiding WPF child-HWND airspace and capture/render divergence.
+/// Phase-2 presentation shim: holds the latest finished frame produced by
+/// ViewRuntime and blits it to the Win32 child HWND via GDI StretchDIBits.
+/// This side no longer interprets display lists or rasterizes anything — the
+/// pixel buffer arrives complete from the view bridge. If no bridge is
+/// attached there is no frame, and Capture/Present report an empty surface.
 /// </summary>
 internal sealed partial class WindowsRetainedRenderer : IDisposable
 {
@@ -102,8 +100,6 @@ internal sealed partial class WindowsRetainedRenderer : IDisposable
     private long _renderedRevision;
     private long _stale;
     private string? _toast;
-    private ViewRuntimeSurface? _native;
-    private bool _nativeAvailable;
     private bool _disposed;
 
     internal long RenderedRevision { get { lock (_gate) return _renderedRevision; } }
@@ -122,33 +118,18 @@ internal sealed partial class WindowsRetainedRenderer : IDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (frame.Revision <= _renderedRevision) { _stale++; return; }
-            _frame = frame with { Commands = new ReadOnlyCollection<AndroidDrawCommand>(frame.Commands.ToArray()) };
+            _frame = frame;
             _renderedRevision = frame.Revision;
         }
     }
 
     internal void SetToast(string? text) { lock (_gate) { ObjectDisposedException.ThrowIf(_disposed, this); _toast = text; } }
 
-    internal int? HitTest(float pixelX, float pixelY)
-    {
-        lock (_gate)
-        {
-            if (_frame is null || _disposed) return null;
-            float x = pixelX / _density, y = pixelY / _density;
-            for (int index = _frame.Commands.Count - 1; index >= 0; index--)
-            {
-                AndroidRect? rect = _frame.Commands[index] switch { AndroidFillRectCommand fill => fill.Rect, AndroidDrawTextCommand text => text.Rect, _ => null };
-                if (rect is { } bounds && bounds.Contains(x, y) && _frame.Commands[index].ResourceId != 0) return _frame.Commands[index].ResourceId;
-            }
-            return null;
-        }
-    }
-
     internal WindowsFrameCapture Capture()
     {
-        WindowsRetainedFrame? frame; int width, height; float density; string? toast;
-        lock (_gate) { ObjectDisposedException.ThrowIf(_disposed, this); frame = _frame; width = _width; height = _height; density = _density; toast = _toast; }
-        byte[] pixels = RenderDib(frame, width, height, density, toast);
+        WindowsRetainedFrame? frame; int width, height; float density;
+        lock (_gate) { ObjectDisposedException.ThrowIf(_disposed, this); frame = _frame; width = _width; height = _height; density = _density; }
+        byte[] pixels = frame is null ? new byte[checked(width * height * 4)] : EnsureSized(frame.Bgra, width, height);
         return new(width, height, pixels, Convert.ToHexString(SHA256.HashData(pixels)), frame?.Revision ?? 0, frame?.SemanticSnapshot ?? string.Empty);
     }
 
@@ -163,104 +144,13 @@ internal sealed partial class WindowsRetainedRenderer : IDisposable
         }
     }
 
-    private byte[] RenderDib(WindowsRetainedFrame? frame, int width, int height, float density, string? toast)
+    private static byte[] EnsureSized(byte[] bgra, int width, int height)
     {
-        int stride = checked(width * 4); var pixels = new byte[checked(stride * height)];
-        EnsureNativeSurface(width, height, density);
-
-        if (_nativeAvailable)
-        {
-            // Real ViewRuntime rasterizer: frame_begin, draw each command in
-            // display-list order, frame_end, then copy the finished BGRA buffer.
-            // Pixel byte order matches (ARGB8888 little-endian == BGRA), verified
-            // against pack_color + FillPixels; direct Marshal.Copy, no reorder.
-            _native!.BeginFrame();
-            if (frame is not null)
-                foreach (AndroidDrawCommand command in frame.Commands)
-                    switch (command)
-                    {
-                        case AndroidFillRectCommand fill:
-                            AndroidRect fr = Scale(fill.Rect, density);
-                            _native.DrawFillRect(fr.X, fr.Y, fr.Width, fr.Height, fill.Color, fill.ViewId);
-                            break;
-                        case AndroidDrawTextCommand text:
-                            AndroidRect tr = Scale(text.Rect, density);
-                            _native.DrawText(tr.X, tr.Y, tr.Width, tr.Height, text.Text, Math.Max(1, text.TextSizePixels * density), text.Color, text.ViewId);
-                            break;
-                    }
-            _native.EndFrame();
-            _native.CopyPixels(pixels);
-        }
-        else
-        {
-            // Native rasterizer unavailable (DLL missing/load failed): fall back to
-            // the original hand-rolled fake rasterizer so rendering still works.
-            FillPixels(pixels, width, height, new AndroidRect(0, 0, width, height), new AndroidColor(255, 250, 250, 250));
-            if (frame is not null)
-                foreach (AndroidDrawCommand command in frame.Commands)
-                    switch (command)
-                    {
-                        case AndroidFillRectCommand fill: FillPixels(pixels, width, height, Scale(fill.Rect, density), fill.Color); break;
-                        case AndroidDrawTextCommand text: DrawPseudoText(pixels, width, height, Scale(text.Rect, density), text.Text, Math.Max(1, text.TextSizePixels * density), text.Color); break;
-                    }
-        }
-
-        // Toast overlay stays host-owned pseudo-text (not part of the guest display
-        // list; low priority — routed through ViewRuntime in a future unit).
-        if (!string.IsNullOrEmpty(toast))
-        {
-            float toastWidth = Math.Min(width - 32, Math.Max(120, toast.Length * 9 + 32));
-            var rect = new AndroidRect((width - toastWidth) / 2, Math.Max(8, height - 72), toastWidth, 48);
-            FillPixels(pixels, width, height, rect, new AndroidColor(238, 38, 38, 38));
-            DrawPseudoText(pixels, width, height, new(rect.X + 16, rect.Y + 8, rect.Width - 32, rect.Height - 16), toast, 16, new AndroidColor(255, 255, 255, 255));
-        }
-        return pixels;
+        int expected = checked(width * height * 4);
+        return bgra.Length == expected ? bgra : new byte[expected];
     }
 
-    /// <summary>Creates (once) and resizes the native ViewRuntime surface to the
-    /// current frame dimensions. Falls back to the fake rasterizer when the DLL
-    /// cannot load or the surface cannot be created.</summary>
-    private void EnsureNativeSurface(int width, int height, float density)
-    {
-        if (_nativeAvailable) { _native!.Resize(width, height, density); return; }
-        if (_native is not null) return; // already failed
-        try
-        {
-            _native = ViewRuntimeSurface.Create(ViewRuntimeNative.PickSystemFont());
-            if (_native is not null) { _native.Resize(width, height, density); _nativeAvailable = true; }
-        }
-        catch (DllNotFoundException) { _native = null; }
-        catch (BadImageFormatException) { _native = null; }
-    }
-
-    private static AndroidRect Scale(AndroidRect rect, float density) => new(rect.X * density, rect.Y * density, rect.Width * density, rect.Height * density);
-    private static void FillPixels(byte[] pixels, int width, int height, AndroidRect rect, AndroidColor color)
-    {
-        int left = Math.Clamp((int)MathF.Floor(rect.X), 0, width), top = Math.Clamp((int)MathF.Floor(rect.Y), 0, height);
-        int right = Math.Clamp((int)MathF.Ceiling(rect.X + rect.Width), 0, width), bottom = Math.Clamp((int)MathF.Ceiling(rect.Y + rect.Height), 0, height);
-        for (int y = top; y < bottom; y++) for (int x = left; x < right; x++) { int p = (y * width + x) * 4; pixels[p] = color.B; pixels[p + 1] = color.G; pixels[p + 2] = color.R; pixels[p + 3] = color.A; }
-    }
-
-    // Deterministic 5x7 cell painter. It deliberately shares its cell metrics with measurement.
-    private static void DrawPseudoText(byte[] pixels, int width, int height, AndroidRect rect, string text, float size, AndroidColor color)
-    {
-        int cellH = Math.Max(7, (int)MathF.Round(size)), cellW = Math.Max(4, (int)MathF.Round(size * .6f));
-        int cursorX = (int)rect.X, cursorY = (int)(rect.Y + Math.Max(0, (rect.Height - cellH) / 2));
-        foreach (char ch in text)
-        {
-            if (cursorX + cellW > rect.X + rect.Width) break;
-            if (!char.IsWhiteSpace(ch))
-            {
-                uint bits = unchecked((uint)(ch * 2654435761u));
-                for (int row = 0; row < 7; row++) for (int col = 0; col < 5; col++)
-                    if (row is 0 or 6 || col is 0 or 4 || ((bits >> ((row * 5 + col) & 31)) & 1) != 0)
-                        FillPixels(pixels, width, height, new(cursorX + col * cellW / 6f, cursorY + row * cellH / 8f, Math.Max(1, cellW / 7f), Math.Max(1, cellH / 9f)), color);
-            }
-            cursorX += cellW;
-        }
-    }
-
-    public void Dispose() { lock (_gate) { _disposed = true; _frame = null; _toast = null; _native?.Dispose(); _native = null; } }
+    public void Dispose() { lock (_gate) { _disposed = true; _frame = null; _toast = null; } }
 
     [StructLayout(LayoutKind.Sequential)] private struct BitmapInfoHeader
     {
