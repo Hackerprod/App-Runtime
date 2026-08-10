@@ -40,6 +40,7 @@ public static class Program
     {
         var options = Parse(args);
         using var traceOutput = TraceOutputLease.Open(options.ApkPath, options.TracePath);
+        using var capabilityAudit = options.CapabilityAuditPath is string auditPath ? new FileAndroidCapabilityAuditSink(auditPath) : null;
         using var factory = new WpfActivityWindowFactory();
         using var clipboard = new WindowsClipboardAdapter();
         var connectivity = new WindowsConnectivityAdapter();
@@ -47,7 +48,7 @@ public static class Program
         var runtime = new AndroidAppRuntime();
         await using var hosted = await runtime.LaunchSessionAsync(
             traceOutput.ApkStream,
-            new AndroidRuntimeServices(factory, logs, traceCapacity: 4096, clock: new WindowsAndroidClock(), capabilityPolicy: new AndroidCapabilityPolicy(options.Grants), clipboard: clipboard, connectivity: connectivity, power: new WindowsPowerAdapter(), viewBridgeFactory: ViewRuntimeAndroidViewBridge.TryCreate));
+            new AndroidRuntimeServices(factory, logs, traceCapacity: 4096, clock: new WindowsAndroidClock(), capabilityPolicy: new AndroidCapabilityPolicy(options.Grants), clipboard: clipboard, connectivity: connectivity, power: new WindowsPowerAdapter(), viewBridgeFactory: ViewRuntimeAndroidViewBridge.TryCreate, capabilityAudit: capabilityAudit));
         Console.WriteLine($"READY hwnd={hosted.Window.Handle} title={hosted.Window.Title}");
 
         if (options.CaptureFramePath is string capturePath)
@@ -94,13 +95,14 @@ public static class Program
     private static HostOptions Parse(string[] args)
     {
         if (args.Length == 0)
-            throw new ArgumentException("Usage: AndroidRuntime.WindowsHost <apk> [--auto-close-ms <100..600000>] [--trace <path>] [--capture-frame <path.bmp>] [--grant-clipboard-read] [--grant-clipboard-write] [--grant-network-state] [--grant-power]");
+            throw new ArgumentException("Usage: AndroidRuntime.WindowsHost <apk> [--auto-close-ms <100..600000>] [--trace <path>] [--capture-frame <path.bmp>] [--capability-audit <path>] [--grant-clipboard-read] [--grant-clipboard-write] [--grant-network-state] [--grant-power]");
         string apkPath = Path.GetFullPath(args[0]);
         if (!File.Exists(apkPath) || !string.Equals(Path.GetExtension(apkPath), ".apk", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("APK path does not exist or is not an .apk file: " + apkPath);
         int? autoClose = null;
         string? tracePath = null;
         string? captureFramePath = null;
+        string? capabilityAuditPath = null;
         var grants = new HashSet<AndroidCapability>();
         for (int index = 1; index < args.Length; index++)
         {
@@ -122,6 +124,11 @@ public static class Program
                     throw new ArgumentException("--capture-frame requires a .bmp path (BGRA32 top-down BMP, no extra dependency).");
                 continue;
             }
+            if (args[index] == "--capability-audit" && index + 1 < args.Length)
+            {
+                capabilityAuditPath = Path.GetFullPath(args[++index]);
+                continue;
+            }
             AndroidCapability? grant = args[index] switch { "--grant-clipboard-read" => AndroidCapability.ClipboardRead, "--grant-clipboard-write" => AndroidCapability.ClipboardWrite, "--grant-network-state" => AndroidCapability.NetworkState, "--grant-power" => AndroidCapability.PowerRead, _ => null };
             if (grant.HasValue)
             {
@@ -134,7 +141,9 @@ public static class Program
             throw new ArgumentException("Trace output path must not alias the input APK path.");
         if (captureFramePath is not null && PathsAlias(apkPath, captureFramePath))
             throw new ArgumentException("Capture output path must not alias the input APK path.");
-        return new HostOptions(apkPath, autoClose, tracePath, captureFramePath, grants.ToArray());
+        if (capabilityAuditPath is not null && (PathsAlias(apkPath, capabilityAuditPath) || (tracePath is not null && PathsAlias(tracePath, capabilityAuditPath))))
+            throw new ArgumentException("Capability audit output path must not alias the input APK or trace path.");
+        return new HostOptions(apkPath, autoClose, tracePath, captureFramePath, capabilityAuditPath, grants.ToArray());
     }
 
     private static bool PathsAlias(string left, string right)
@@ -173,7 +182,7 @@ public static class Program
         output.Flush(flushToDisk: true);
     }
 
-    private sealed record HostOptions(string ApkPath, int? AutoCloseMilliseconds, string? TracePath, string? CaptureFramePath, IReadOnlyCollection<AndroidCapability> Grants);
+    private sealed record HostOptions(string ApkPath, int? AutoCloseMilliseconds, string? TracePath, string? CaptureFramePath, string? CapabilityAuditPath, IReadOnlyCollection<AndroidCapability> Grants);
 }
 
 internal sealed class TraceOutputLease : IDisposable

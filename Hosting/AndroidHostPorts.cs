@@ -101,7 +101,27 @@ public sealed class UtcAndroidWallClock : IAndroidWallClock
     public long NowMillis() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 }
 
-public enum AndroidCapability { ClipboardRead, ClipboardWrite, NetworkState, PowerRead }
+/// <summary>Capability taxonomy mirroring Android's real permission groups.
+/// The first four values are the original host gates (extend, never rename);
+/// the rest are the modular taxonomy added by the modular capability system
+/// (Files, Bluetooth, Camera, real Network I/O, Location, Microphone). Map to
+/// real Android permission names via <see cref="AndroidCapabilityInfo"/>.</summary>
+public enum AndroidCapability
+{
+    ClipboardRead,
+    ClipboardWrite,
+    NetworkState,
+    PowerRead,
+    FileRead,
+    FileWrite,
+    BluetoothScan,
+    BluetoothConnect,
+    Camera,
+    NetworkConnect,
+    LocationCoarse,
+    LocationFine,
+    Microphone
+}
 public sealed record AndroidCapabilityRequest(string SessionId, string PackageName, AndroidCapability Capability, string Operation);
 public interface IAndroidCapabilityPolicy { bool IsAllowed(AndroidCapabilityRequest request); }
 public sealed class AndroidCapabilityPolicy : IAndroidCapabilityPolicy
@@ -229,7 +249,8 @@ public sealed class AndroidRuntimeServices
         IAndroidServiceAuditSink? serviceAudit = null,
         AndroidServiceLimits? serviceLimits = null,
         IAndroidPower? power = null,
-        Func<AndroidResourceResolver, AndroidResourceQueryService, int, IAndroidViewBridge?>? viewBridgeFactory = null)
+        Func<AndroidResourceResolver, AndroidResourceQueryService, int, IAndroidViewBridge?>? viewBridgeFactory = null,
+        IAndroidCapabilityAuditSink? capabilityAudit = null)
     {
         WindowFactory = windowFactory ?? throw new ArgumentNullException(nameof(windowFactory));
         LogSink = logSink ?? throw new ArgumentNullException(nameof(logSink));
@@ -252,6 +273,7 @@ public sealed class AndroidRuntimeServices
         ServiceLimits = serviceLimits ?? AndroidServiceLimits.Default; ServiceLimits.Validate();
         Power = power ?? new UnavailableAndroidPower();
         ViewBridgeFactory = viewBridgeFactory;
+        CapabilityAudit = capabilityAudit ?? new NullAndroidCapabilityAuditSink();
     }
 
     public IActivityWindowFactory WindowFactory { get; }
@@ -275,6 +297,13 @@ public sealed class AndroidRuntimeServices
     /// means the framework state falls back to the unavailable bridge (no
     /// local visual behavior).</summary>
     public Func<AndroidResourceResolver, AndroidResourceQueryService, int, IAndroidViewBridge?>? ViewBridgeFactory { get; }
+
+    /// <summary>Structured capability-attempt audit sink. Records one entry per
+    /// <see cref="IAndroidCapabilityPolicy.IsAllowed(AndroidCapabilityRequest)"/>
+    /// call (allowed or denied) via the framework-state funnel. A file-backed
+    /// sink (e.g. <see cref="FileAndroidCapabilityAuditSink"/>) survives a crash
+    /// immediately after a denial — the trace file does not.</summary>
+    public IAndroidCapabilityAuditSink CapabilityAudit { get; }
 
     public static AndroidRuntimeServices CreateHeadless() =>
         new(new InMemoryActivityWindowFactory(), new ConsoleAndroidLogSink());

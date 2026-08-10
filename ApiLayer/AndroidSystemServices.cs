@@ -51,20 +51,20 @@ internal sealed class AndroidSystemServiceRegistry : IDisposable
     }
     private bool DemandClipboardLookup()
     {
-        bool allowed = _state.CapabilityPolicy.IsAllowed(new(_state.SessionId, _state.PackageName, AndroidCapability.ClipboardRead, "lookup")) ||
-                       _state.CapabilityPolicy.IsAllowed(new(_state.SessionId, _state.PackageName, AndroidCapability.ClipboardWrite, "lookup"));
+        bool allowed = _state.IsCapabilityAllowed(new(_state.SessionId, _state.PackageName, AndroidCapability.ClipboardRead, "lookup")) ||
+                       _state.IsCapabilityAllowed(new(_state.SessionId, _state.PackageName, AndroidCapability.ClipboardWrite, "lookup"));
         if (!allowed) Denied(ClipboardName, "lookup", AndroidCapability.ClipboardRead);
         Audit(ClipboardName, "lookup", true, 0, 0, null); return true;
     }
     private bool DemandLookup(AndroidCapability capability, string service)
     {
-        if (!_state.CapabilityPolicy.IsAllowed(new(_state.SessionId, _state.PackageName, capability, "lookup"))) Denied(service, "lookup", capability);
+        if (!_state.IsCapabilityAllowed(new(_state.SessionId, _state.PackageName, capability, "lookup"))) Denied(service, "lookup", capability);
         Audit(service, "lookup", true, 0, 0, null); return true;
     }
     internal void Demand(AndroidCapability capability, string service, string operation)
     {
         if (Interlocked.Increment(ref _operations) > _state.ServiceLimits.MaxOperations) throw new AndroidPeerQuotaExceededException("service operation", _state.ServiceLimits.MaxOperations);
-        if (!_state.CapabilityPolicy.IsAllowed(new(_state.SessionId, _state.PackageName, capability, operation))) Denied(service, operation, capability);
+        if (!_state.IsCapabilityAllowed(new(_state.SessionId, _state.PackageName, capability, operation))) Denied(service, operation, capability);
     }
     private void Denied(string service, string operation, AndroidCapability capability)
     {

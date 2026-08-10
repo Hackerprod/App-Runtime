@@ -190,6 +190,7 @@ public static class AndroidApiBindings
 		RegisterIterators(builder, state);
 		RegisterWeakReferences(builder, state);
 		RegisterCopyOnWriteArraySets(builder, state);
+		AndroidCapabilityModules.RegisterAll(builder, state);
 		return builder;
 	}
 

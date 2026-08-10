@@ -128,7 +128,8 @@ public sealed class AndroidFrameworkState : IDisposable
         IAndroidPower? power = null,
         AndroidResourceResolver? resources = null,
         AndroidResourceQueryService? resourceQueries = null,
-        IAndroidViewBridge? viewBridge = null)
+        IAndroidViewBridge? viewBridge = null,
+        IAndroidCapabilityAuditSink? capabilityAudit = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         SessionId = sessionId;
@@ -145,6 +146,7 @@ public sealed class AndroidFrameworkState : IDisposable
         WallClock = wallClock ?? new UtcAndroidWallClock();
         DeclaredPermissions = Array.AsReadOnly((declaredPermissions ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal).ToArray());
         CapabilityPolicy = capabilityPolicy ?? AndroidCapabilityPolicy.DenyAll;
+        CapabilityAudit = capabilityAudit ?? new NullAndroidCapabilityAuditSink();
         Clipboard = clipboard ?? new UnavailableAndroidClipboard();
         Connectivity = connectivity ?? new UnavailableAndroidConnectivity();
         ServiceAudit = serviceAudit ?? new NullAndroidServiceAuditSink();
@@ -204,6 +206,7 @@ public sealed class AndroidFrameworkState : IDisposable
     public IAndroidWallClock WallClock { get; }
     public IReadOnlyCollection<string> DeclaredPermissions { get; }
     internal IAndroidCapabilityPolicy CapabilityPolicy { get; }
+    internal IAndroidCapabilityAuditSink CapabilityAudit { get; }
     internal IAndroidClipboard Clipboard { get; }
     internal IAndroidConnectivity Connectivity { get; }
     internal IAndroidServiceAuditSink ServiceAudit { get; }
@@ -224,6 +227,23 @@ public sealed class AndroidFrameworkState : IDisposable
     /// ARSC/AXML parsing. Null when no APK resources are attached.</summary>
     internal AndroidResourceQueryService? ResourceQueries { get; }
     internal AndroidSystemServiceRegistry? SystemServices { get; set; }
+    /// <summary>The modular capability taxonomy registered for this session
+    /// (Files, Bluetooth, Camera, Network I/O, Location, Microphone, plus the
+    /// existing clipboard/network-state/power domains). Each module is
+    /// independently enabled by its capability grants.</summary>
+    public IReadOnlyList<IAndroidCapabilityModule> CapabilityModules => AndroidCapabilityModules.All;
+    /// <summary>Single audit funnel for every capability attempt: delegates to
+    /// the policy, records one structured entry (allowed or denied) to the
+    /// capability audit sink, then returns the verdict. Every guest-facing
+    /// capability check must go through here so no attempt is ever invisible to
+    /// the audit trail.</summary>
+    public bool IsCapabilityAllowed(AndroidCapabilityRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        bool allowed = CapabilityPolicy.IsAllowed(request);
+        try { CapabilityAudit.Record(new(WallClock.NowMillis(), request.SessionId, request.PackageName, request.Capability, request.Operation, allowed)); } catch { }
+        return allowed;
+    }
     public AndroidPeerCounts PeerCounts => new(StringBuilders.Count, Bundles.Count, Intents.Count, Toasts.Count);
     internal bool IsFinishing => Volatile.Read(ref _finishing) != 0;
     internal bool IsDestroyed => Volatile.Read(ref _destroyed) != 0;
