@@ -133,6 +133,8 @@ public sealed class AndroidAppRuntime
                 JavaLangThreadBindings.InitializeMainGuestThread(frameworkState);
                 var activity = interpreter.ConstructInstance(manifest.LauncherActivityDescriptor);
                 frameworkState.AttachActivity(activity);
+                frameworkState.ViewBridge.AttachSession(interpreter, activity, action =>
+                    lane.IsCurrentThread ? action() : lane.InvokeAsync(action, lifetime.Token).GetAwaiter().GetResult());
                 window = services.WindowFactory.Create(
                     sessionId,
                     manifest.PackageName,
@@ -212,6 +214,7 @@ public sealed class AndroidAppRuntime
         JavaLangThreadBindings.InitializeMainGuestThread(frameworkState);
         var activity = interpreter.ConstructInstance(manifest.LauncherActivityDescriptor);
         frameworkState.AttachActivity(activity);
+        frameworkState.ViewBridge.AttachSession(interpreter, activity, action => action());
         var window = services.WindowFactory.Create(
             sessionId,
             manifest.PackageName,

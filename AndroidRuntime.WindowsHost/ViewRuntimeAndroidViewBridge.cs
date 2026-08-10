@@ -1,6 +1,7 @@
 ﻿#nullable enable
 using System.Runtime.InteropServices;
 using System.Text;
+using AndroidRuntime.Core.ApiLayer;
 using AndroidRuntime.Core.Apk;
 using AndroidRuntime.Core.Dex;
 using AndroidRuntime.Core.Ui;
@@ -29,7 +30,13 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
     private readonly Dictionary<DexObject, nint> _guestToNative = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<nint, DexObject> _nativeToGuest = [];
     private readonly Dictionary<nint, DexObject?> _listeners = [];
+    private readonly Dictionary<int, string> _xmlOnClickById = [];
+    private readonly Dictionary<nint, string> _xmlOnClickByNative = [];
+    private readonly object _listenersGate = new();
     private readonly ResourceCallbacks? _callbacks;
+    private DexInterpreter? _interpreter;
+    private DexObject? _activity;
+    private Func<Func<object?>, object?>? _dispatchToLane;
     private nint _root;
     private int _disposed;
 
@@ -45,7 +52,13 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
             _ui = createStatus == 0 ? ui : 0;
             // A real TrueType font makes draw_text render glyphs; null would make
             // ViewRuntime paint a solid block instead of text (the pink-block bug).
-            _surface = ViewRuntimeBridgeNative.viewruntime_surface_create(ViewRuntimeBridgeNative.PickSystemFont());
+            string? fontPath = ViewRuntimeBridgeNative.PickSystemFont();
+            // The UI handle owns measure/layout and some render paths; it needs
+            // the same font so measure (layout position) and paint agree. This
+            // propagates to the render surface internally (shared surface_load_font).
+            if (_ui != 0 && fontPath is not null)
+                ViewRuntimeBridgeNative.android_ui_set_font(_ui, fontPath);
+            _surface = ViewRuntimeBridgeNative.viewruntime_surface_create(fontPath);
             _available = _ui != 0 && _surface != 0;
             if (_available)
             {
@@ -81,6 +94,16 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
 
     public bool IsAvailable => _available;
 
+    public void AttachSession(DexInterpreter interpreter, DexObject activity, Func<Func<object?>, object?> dispatchToLane)
+    {
+        ArgumentNullException.ThrowIfNull(interpreter);
+        ArgumentNullException.ThrowIfNull(activity);
+        ArgumentNullException.ThrowIfNull(dispatchToLane);
+        _interpreter = interpreter;
+        _activity = activity;
+        _dispatchToLane = dispatchToLane;
+    }
+
     public void DisposeBridge()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
@@ -97,6 +120,19 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
         RequireAvailable();
         AndroidXmlDocument document = _resources.LoadLayout(unchecked((uint)layoutResourceId));
         AndroidInflateTree tree = AndroidInflateSerializer.Serialize(document, _applicationThemeStyleId);
+        // Capture declarative android:onClick method names keyed by the node's
+        // resource id (the only identity that survives the native inflate round
+        // trip on this side — the native hierarchy returns no per-node handle
+        // except via find_view_by_id, and findViewById keys on resource id).
+        // Views without a resource id cannot be hit-tested/dispatched through
+        // the host path anyway (HitTest -> FindViewById(id)); the guest
+        // View.performClick() path falls back to the resource-id lookup too.
+        foreach (AndroidInflateNode node in tree.Nodes)
+        {
+            if (node.XmlOnClick is null || node.ResourceId == 0) continue;
+            lock (_listenersGate)
+                _xmlOnClickById[node.ResourceId] = node.XmlOnClick;
+        }
         nint nodesPtr = AllocateNativeTree(tree, out int nodeCount);
         try
         {
@@ -192,8 +228,7 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
     {
         RequireAvailable();
         nint native = NativeOf(view);
-        ViewRuntimeBridgeNative.android_view_get_resource_id(native, out int id);
-        return id;
+        return ViewRuntimeBridgeNative.android_view_get_resource_id(native);
     }
 
     public void SetEnabled(DexObject view, bool enabled)
@@ -227,7 +262,8 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
     {
         RequireAvailable();
         nint native = NativeOf(view);
-        _listeners[native] = listener;
+        lock (_listenersGate)
+            _listeners[native] = listener;
         // The XML onClick handler (if any) is what ViewRuntime's hit-test
         // dispatch uses; programmatic listeners are dispatched by App Runtime
         // after hit-test returns the view id (see PerformClick).
@@ -235,11 +271,50 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
 
     public bool PerformClick(DexObject view)
     {
-        // Click dispatch is DEX execution (this side owns invoking the guest
-        // listener), but the landed ABI has no native perform-click trigger and
-        // no click-handler query. No fabricated success: fail closed.
         RequireAvailable();
-        throw NotWired();
+        // Real View.performClick() returns false on disabled/invisible views,
+        // but the landed ABI has no enabled/visibility GETTERS (IsEnabled /
+        // GetVisibility are NotWired). This is ACCEPTED DEBT: dispatch proceeds
+        // even for disabled/invisible views until ViewRuntime exposes the
+        // reverse queries. The programmatic-listener path and the declarative
+        // android:onClick path both run real guest DEX here — invocation pattern
+        // reused verbatim from the pre-Phase-2 AndroidUiSession.PerformClick.
+        DexInterpreter? interpreter = _interpreter;
+        DexObject? activity = _activity;
+        if (interpreter is null || activity is null) return false;
+
+        nint native = NativeOf(view);
+        int resourceId = 0;
+        try { resourceId = GetId(view); } catch { }
+        DexObject? listener = null;
+        string? xmlOnClick = null;
+        lock (_listenersGate)
+        {
+            _listeners.TryGetValue(native, out listener);
+            if (listener is null)
+            {
+                if (!_xmlOnClickByNative.TryGetValue(native, out xmlOnClick) && resourceId != 0)
+                    _xmlOnClickById.TryGetValue(resourceId, out xmlOnClick);
+            }
+        }
+        if (listener is null && string.IsNullOrWhiteSpace(xmlOnClick)) return false;
+
+        Func<Func<object?>, object?>? dispatch = _dispatchToLane;
+        if (listener is not null)
+        {
+            if (dispatch is null)
+                interpreter.InvokeVirtualInstanceExact(listener, "onClick", "(Landroid/view/View;)V", view);
+            else
+                dispatch(() => interpreter.InvokeVirtualInstanceExact(listener, "onClick", "(Landroid/view/View;)V", view));
+        }
+        else
+        {
+            if (dispatch is null)
+                interpreter.InvokePublicInstanceExact(activity, xmlOnClick!, "(Landroid/view/View;)V", view);
+            else
+                dispatch(() => interpreter.InvokePublicInstanceExact(activity, xmlOnClick!, "(Landroid/view/View;)V", view));
+        }
+        return true;
     }
 
     public void SetText(DexObject view, string? text)
@@ -347,10 +422,13 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
     public int? HitTest(float pixelX, float pixelY)
     {
         RequireAvailable();
-        nint hit = ViewRuntimeBridgeNative.android_ui_hit_test(_ui, 0, pixelX, pixelY);
+        // The native contract requires the REAL root handle: android_ui_hit_test
+        // returns nullptr when root is 0, so passing a null root always missed.
+        // (Found via the real-click validation: hit-test never returned a view.)
+        if (_root == 0) return null;
+        nint hit = ViewRuntimeBridgeNative.android_ui_hit_test(_ui, _root, pixelX, pixelY);
         if (hit == 0) return null;
-        ViewRuntimeBridgeNative.android_view_get_resource_id(hit, out int id);
-        return id;
+        return ViewRuntimeBridgeNative.android_view_get_resource_id(hit);
     }
 
     // ---- internal helpers ----
@@ -388,7 +466,20 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
             var guest = new DexObject(descriptor);
             _nativeToGuest[native] = guest;
             _guestToNative[guest] = native;
-            _listeners[native] = null;
+            lock (_listenersGate)
+            {
+                _listeners[native] = null;
+                // If the view carries a declarative android:onClick and has a
+                // resource id, key it by native handle too so dispatch works
+                // without another native query.
+                try
+                {
+                    int id = ViewRuntimeBridgeNative.android_view_get_resource_id(native);
+                    if (id != 0 && _xmlOnClickById.TryGetValue(id, out string? xmlOnClick))
+                        _xmlOnClickByNative[native] = xmlOnClick;
+                }
+                catch (Exception) { }
+            }
             return guest;
         }
     }

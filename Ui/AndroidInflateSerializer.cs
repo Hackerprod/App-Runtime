@@ -26,6 +26,7 @@ public sealed record AndroidInflateNode(
     string ClassName,
     string? NamespaceUri,
     int ResourceId,
+    string? XmlOnClick,
     IReadOnlyList<AndroidInflateAttribute> Attributes)
 {
 }
@@ -109,16 +110,42 @@ public static class AndroidInflateSerializer
                 resourceId = unchecked((int)attribute.Value.Data);
             break;
         }
+        // android:onClick="methodName" names an Activity method directly (the
+        // older declarative click pattern — no setOnClickListener call). This
+        // side captures it at inflate time so click dispatch can look it up
+        // later without asking ViewRuntime anything.
+        string? xmlOnClick = TryGetXmlOnClick(attributes);
         nodes.Add(new AndroidInflateNode(
             index,
             parentIndex,
             element.Name,
             element.NamespaceUri,
             resourceId,
+            xmlOnClick,
             attributes));
         foreach (AndroidXmlElement child in element.Children)
             Walk(child, index, nodes);
     }
+
+    /// <summary>Extracts the android:onClick attribute's method name from a
+    /// node's raw attribute list, or null when absent/not a string. Pure and
+    /// testable without binary AXML.</summary>
+    public static string? TryGetXmlOnClick(IReadOnlyList<AndroidInflateAttribute> attributes)
+    {
+        foreach (AndroidInflateAttribute attribute in attributes)
+        {
+            if (attribute.Name != "onClick") continue;
+            if (!string.Equals(attribute.NamespaceUri, AndroidNamespaceUri, StringComparison.Ordinal)) continue;
+            if (attribute.Value.Kind == AndroidRawValueKind.String && attribute.Value.String is not null)
+                return attribute.Value.String;
+            break;
+        }
+        return null;
+    }
+
+    /// <summary>http://schemas.android.com/apk/res/android — the standard Android
+    /// framework namespace for android: attributes.</summary>
+    public const string AndroidNamespaceUri = "http://schemas.android.com/apk/res/android";
 
     /// <summary>Maps an AndroidResourceValue (the parsed AXML typed value) to the
     /// raw android_raw_value_t mirror (kind values match android.h exactly).

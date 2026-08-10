@@ -26,6 +26,9 @@ internal static partial class ViewRuntimeBridgeNative
     [LibraryImport(Dll)]
     internal static partial int android_ui_create(ref AndroidUiOptions options, out nint ui);
 
+    [LibraryImport(Dll, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int android_ui_set_font(nint ui, string? path);
+
     [LibraryImport(Dll)]
     internal static partial void android_ui_destroy(nint ui);
 
@@ -101,7 +104,7 @@ internal static partial class ViewRuntimeBridgeNative
     internal static partial int android_view_get_padding_dp(nint view, out AndroidThicknessF padding);
 
     [LibraryImport(Dll)]
-    internal static partial int android_view_get_resource_id(nint view, out int resource_id);
+    internal static partial int android_view_get_resource_id(nint view);
 
     [LibraryImport(Dll)]
     internal static partial int android_view_get_class(nint view);

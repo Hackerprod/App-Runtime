@@ -1,4 +1,5 @@
 #nullable enable
+using AndroidRuntime.Core.ApiLayer;
 using AndroidRuntime.Core.Dex;
 
 namespace AndroidRuntime.Core.Ui;
@@ -25,6 +26,16 @@ public interface IAndroidViewBridge
     /// <summary>Releases the underlying bridge (native surface/hierarchy) when
     /// the session shuts down. No-op for the unavailable implementation.</summary>
     void DisposeBridge();
+
+    /// <summary>Binds the session interpreter + Activity + a lane-dispatch
+    /// function so the bridge can invoke guest click handlers (programmatic
+    /// listeners and declarative android:onClick methods) through real DEX
+    /// execution ON the session execution lane — real Android fires onClick on
+    /// the main/UI thread, and lane-sensitive bindings (Toast, runOnUiThread)
+    /// enforce it. dispatchToLane runs its function on the lane and returns the
+    /// result; implementations use the on-lane fast path when already there.
+    /// No-op for the unavailable implementation.</summary>
+    void AttachSession(DexInterpreter interpreter, DexObject activity, Func<Func<object?>, object?> dispatchToLane);
 
     // ---- inflate / content (ViewRuntime builds the real view hierarchy) ----
 
@@ -101,6 +112,7 @@ public sealed class UnavailableAndroidViewBridge : IAndroidViewBridge
 
     public bool IsAvailable => false;
     public void DisposeBridge() { }
+    public void AttachSession(DexInterpreter interpreter, DexObject activity, Func<Func<object?>, object?> dispatchToLane) { }
     public void SetContentView(int layoutResourceId) { Throw(); }
     public DexObject Inflate(int layoutResourceId) { Throw(); return null!; }
     public DexObject? FindViewById(int id, DexObject? receiver = null) { Throw(); return null; }

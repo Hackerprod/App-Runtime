@@ -123,4 +123,52 @@ public sealed class AndroidInflateBridgeTests
         Assert.NotEqual(0, manifest.ApplicationThemeStyleId);
         Assert.InRange(manifest.ApplicationThemeStyleId, 0, 0x7fffffff);
     }
+
+    [Fact]
+    public void Inflate_serializer_captures_declarative_xml_onclick()
+    {
+        // The click-dispatch unit captures android:onClick="methodName" at
+        // inflate time (an Activity method named directly in the layout — the
+        // non-programmatic click style). The extraction is a pure helper over
+        // the raw attribute list, so it is tested without binary AXML.
+        const string androidNs = "http://schemas.android.com/apk/res/android";
+
+        AndroidInflateAttribute[] onClickAttrs =
+        [
+            new(androidNs, "onClick", 0x01010067, new AndroidRawValue(AndroidRawValueKind.String, 0, "onPlaySoundClick")),
+            new(androidNs, "text", 0x0101014f, new AndroidRawValue(AndroidRawValueKind.String, 0, "Play sound"))
+        ];
+        Assert.Equal("onPlaySoundClick", AndroidInflateSerializer.TryGetXmlOnClick(onClickAttrs));
+
+        // Absent -> null.
+        AndroidInflateAttribute[] noOnClick =
+        [
+            new(androidNs, "text", 0x0101014f, new AndroidRawValue(AndroidRawValueKind.String, 0, "No handler"))
+        ];
+        Assert.Null(AndroidInflateSerializer.TryGetXmlOnClick(noOnClick));
+
+        // Wrong namespace (not android:) -> null.
+        AndroidInflateAttribute[] foreignOnClick =
+        [
+            new("http://custom.example/schemas", "onClick", 0x7f010001, new AndroidRawValue(AndroidRawValueKind.String, 0, "onCustom"))
+        ];
+        Assert.Null(AndroidInflateSerializer.TryGetXmlOnClick(foreignOnClick));
+
+        // Non-string onClick value (e.g. a reference) -> null.
+        AndroidInflateAttribute[] referenceOnClick =
+        [
+            new(androidNs, "onClick", 0x01010067, new AndroidRawValue(AndroidRawValueKind.Reference, 0x7f0a0001, null))
+        ];
+        Assert.Null(AndroidInflateSerializer.TryGetXmlOnClick(referenceOnClick));
+
+        // The UiProbe fixture layout declares android:onClick="handleClick" on
+        // its Button (R.id.action) — the serializer must capture it on exactly
+        // that node and leave every other node null.
+        LoadedApk apk = ApkLoader.Load(FixturePath);
+        var resolver = AndroidResourceResolver.Create(apk);
+        AndroidInflateTree tree = AndroidInflateSerializer.Serialize(resolver.LoadLayout("main"), applicationThemeStyleId: 0x7f10000b);
+        AndroidInflateNode button = Assert.Single(tree.Nodes, node => node.ClassName == "Button");
+        Assert.Equal("handleClick", button.XmlOnClick);
+        Assert.Equal(0, tree.Nodes.Count(node => node != button && node.XmlOnClick is not null));
+    }
 }

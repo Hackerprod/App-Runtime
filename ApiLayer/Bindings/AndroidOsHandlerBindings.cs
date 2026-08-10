@@ -47,6 +47,14 @@ internal static class AndroidOsHandlerBindings
         builder.Register(Api(HandlerClass, "post", "(Ljava/lang/Runnable;)Z"), (_, args) => Post(state, state.Handlers.Get(Receiver(args)), RequireDex(args[1]), delayMillis: 0) ? 1 : 0);
         builder.Register(Api(HandlerClass, "postDelayed", "(Ljava/lang/Runnable;J)Z"), (_, args) => Post(state, state.Handlers.Get(Receiver(args)), RequireDex(args[1]), RequireLong(args[2])) ? 1 : 0);
         builder.Register(Api(HandlerClass, "removeCallbacks", "(Ljava/lang/Runnable;)V"), (_, args) => { RemoveCallbacks(state.Handlers.Get(Receiver(args)), RequireDex(args[1])); return null!; });
+        // removeCallbacksAndMessages(Object token): the standard teardown call
+        // (e.g. onDestroy). This runtime tracks Runnable callbacks only (no
+        // Message objects), so null AND non-null tokens both clear every tracked
+        // callback/timer for the handler — the token is accepted but not matched,
+        // which is honest for a model with no per-token messages. Found via the
+        // owner's RuntimeApiLab APK: without it, clean shutdown crashed on an
+        // unimplemented boundary.
+        builder.Register(Api(HandlerClass, "removeCallbacksAndMessages", "(Ljava/lang/Object;)V"), (_, args) => { RemoveAllCallbacks(state.Handlers.Get(Receiver(args))); return null!; });
         builder.Register(Api(HandlerClass, "hasCallbacks", "(Ljava/lang/Runnable;)Z"), (_, args) => { lock (state.Handlers.Get(Receiver(args)).Gate) return state.Handlers.Get(Receiver(args)).Pending.Contains(RequireDex(args[1])) ? 1 : 0; });
         builder.Register(Api(HandlerClass, "postAtFrontOfQueue", "(Ljava/lang/Runnable;)Z"), (_, args) => Post(state, state.Handlers.Get(Receiver(args)), RequireDex(args[1]), delayMillis: 0) ? 1 : 0);
     }
@@ -188,6 +196,17 @@ internal static class AndroidOsHandlerBindings
         {
             handler.Pending.Remove(runnable);
             if (handler.Timers.Remove(runnable, out var cts)) cts.Cancel();
+        }
+    }
+
+    private static void RemoveAllCallbacks(HandlerPeer handler)
+    {
+        lock (handler.Gate)
+        {
+            handler.Pending.Clear();
+            foreach (CancellationTokenSource cts in handler.Timers.Values)
+                cts.Cancel();
+            handler.Timers.Clear();
         }
     }
 
