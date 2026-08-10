@@ -187,6 +187,45 @@ public sealed class UnavailableAndroidConnectivity : IAndroidConnectivity
     public bool IsAvailable => false;
     public AndroidConnectivitySnapshot GetSnapshot(CancellationToken cancellationToken) => throw new InvalidOperationException("Connectivity adapter is unavailable.");
 }
+
+/// <summary>App-private file sandbox port (real Android app-specific
+/// directories): getCacheDir / getExternalFilesDir return File objects pointing
+/// INSIDE this sandbox — never arbitrary filesystem access. Scoped-storage
+/// semantics: app-specific directories need NO runtime permission, so these
+/// bindings are deliberately ungated (the FileRead/FileWrite capabilities gate
+/// shared-storage access, a separate future surface).</summary>
+public interface IAndroidFileSandbox
+{
+    string GetCacheDirectory(string packageName);
+    string GetFilesDirectory(string packageName, string? type);
+}
+
+/// <summary>Default sandbox: %LOCALAPPDATA%\AndroidRuntime\&lt;package&gt;\cache
+/// (Context.getCacheDir) and ...\files[/&lt;type&gt;] (Context.getExternalFilesDir),
+/// mirroring Android/data/&lt;package&gt;/... layout. Directories are created on
+/// demand (real Android pre-creates them).</summary>
+public sealed class LocalAppDataFileSandbox : IAndroidFileSandbox
+{
+    private readonly string _root;
+
+    public LocalAppDataFileSandbox(string? rootOverride = null)
+    {
+        _root = rootOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AndroidRuntime");
+    }
+
+    public string GetCacheDirectory(string packageName) => EnsureDirectory(Path.Combine(_root, packageName, "cache"));
+
+    public string GetFilesDirectory(string packageName, string? type) =>
+        string.IsNullOrWhiteSpace(type)
+            ? EnsureDirectory(Path.Combine(_root, packageName, "files"))
+            : EnsureDirectory(Path.Combine(_root, packageName, "files", type));
+
+    private static string EnsureDirectory(string path)
+    {
+        Directory.CreateDirectory(path);
+        return path;
+    }
+}
 public sealed record AndroidServiceLimits(int MaxClipData = 64, int MaxTextLength = 65_536, int MaxOperations = 512)
 {
     public void Validate() { if (MaxClipData <= 0 || MaxTextLength <= 0 || MaxOperations <= 0) throw new ArgumentOutOfRangeException(nameof(AndroidServiceLimits)); }
@@ -250,7 +289,8 @@ public sealed class AndroidRuntimeServices
         AndroidServiceLimits? serviceLimits = null,
         IAndroidPower? power = null,
         Func<AndroidResourceResolver, AndroidResourceQueryService, int, IAndroidViewBridge?>? viewBridgeFactory = null,
-        IAndroidCapabilityAuditSink? capabilityAudit = null)
+        IAndroidCapabilityAuditSink? capabilityAudit = null,
+        IAndroidFileSandbox? fileSandbox = null)
     {
         WindowFactory = windowFactory ?? throw new ArgumentNullException(nameof(windowFactory));
         LogSink = logSink ?? throw new ArgumentNullException(nameof(logSink));
@@ -274,6 +314,7 @@ public sealed class AndroidRuntimeServices
         Power = power ?? new UnavailableAndroidPower();
         ViewBridgeFactory = viewBridgeFactory;
         CapabilityAudit = capabilityAudit ?? new NullAndroidCapabilityAuditSink();
+        FileSandbox = fileSandbox ?? new LocalAppDataFileSandbox();
     }
 
     public IActivityWindowFactory WindowFactory { get; }
@@ -304,6 +345,10 @@ public sealed class AndroidRuntimeServices
     /// sink (e.g. <see cref="FileAndroidCapabilityAuditSink"/>) survives a crash
     /// immediately after a denial — the trace file does not.</summary>
     public IAndroidCapabilityAuditSink CapabilityAudit { get; }
+
+    /// <summary>App-private file sandbox backing Context.getCacheDir /
+    /// getExternalFilesDir (scoped-storage semantics: ungated).</summary>
+    public IAndroidFileSandbox FileSandbox { get; }
 
     public static AndroidRuntimeServices CreateHeadless() =>
         new(new InMemoryActivityWindowFactory(), new ConsoleAndroidLogSink());

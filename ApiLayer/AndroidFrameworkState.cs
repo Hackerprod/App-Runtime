@@ -129,7 +129,8 @@ public sealed class AndroidFrameworkState : IDisposable
         AndroidResourceResolver? resources = null,
         AndroidResourceQueryService? resourceQueries = null,
         IAndroidViewBridge? viewBridge = null,
-        IAndroidCapabilityAuditSink? capabilityAudit = null)
+        IAndroidCapabilityAuditSink? capabilityAudit = null,
+        IAndroidFileSandbox? fileSandbox = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         SessionId = sessionId;
@@ -147,6 +148,7 @@ public sealed class AndroidFrameworkState : IDisposable
         DeclaredPermissions = Array.AsReadOnly((declaredPermissions ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal).ToArray());
         CapabilityPolicy = capabilityPolicy ?? AndroidCapabilityPolicy.DenyAll;
         CapabilityAudit = capabilityAudit ?? new NullAndroidCapabilityAuditSink();
+        FileSandbox = fileSandbox ?? new LocalAppDataFileSandbox();
         Clipboard = clipboard ?? new UnavailableAndroidClipboard();
         Connectivity = connectivity ?? new UnavailableAndroidConnectivity();
         ServiceAudit = serviceAudit ?? new NullAndroidServiceAuditSink();
@@ -207,6 +209,7 @@ public sealed class AndroidFrameworkState : IDisposable
     public IReadOnlyCollection<string> DeclaredPermissions { get; }
     internal IAndroidCapabilityPolicy CapabilityPolicy { get; }
     internal IAndroidCapabilityAuditSink CapabilityAudit { get; }
+    internal IAndroidFileSandbox FileSandbox { get; }
     internal IAndroidClipboard Clipboard { get; }
     internal IAndroidConnectivity Connectivity { get; }
     internal IAndroidServiceAuditSink ServiceAudit { get; }

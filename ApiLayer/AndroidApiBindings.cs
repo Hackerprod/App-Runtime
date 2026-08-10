@@ -94,6 +94,23 @@ public static class AndroidApiBindings
 			string permission = args[1] as string ?? string.Empty;
 			return state.CheckSelfPermission(permission);
 		});
+		// Context.getExternalFilesDir(String type) / getCacheDir(): app-private
+		// sandbox directories, deliberately UNGATED (real scoped storage: the
+		// app's own directories need no runtime permission; FileRead/FileWrite
+		// gate shared-storage access, a separate future surface). The returned
+		// java.io.File carries its real path in the actual File instance field
+		// so later bindings (File/FileWriter ctors) can resolve it.
+		builder.Register(Api("Landroid/content/Context;", "getExternalFilesDir", "(Ljava/lang/String;)Ljava/io/File;"), delegate(AndroidApiInvocation _, object[] args)
+		{
+			RequireContext(state, Receiver(args));
+			string type = args[1] as string ?? string.Empty;
+			return NewFileObject(state.FileSandbox.GetFilesDirectory(state.PackageName, string.IsNullOrEmpty(type) ? null : type));
+		});
+		builder.Register(Api("Landroid/content/Context;", "getCacheDir", "()Ljava/io/File;"), delegate(AndroidApiInvocation _, object[] args)
+		{
+			RequireContext(state, Receiver(args));
+			return NewFileObject(state.FileSandbox.GetCacheDirectory(state.PackageName));
+		});
 		// ComponentActivity/Activity.getApplication() -> the session Application.
 		builder.Register(Api("Landroid/app/Activity;", "getApplication", "()Landroid/app/Application;"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
@@ -1760,6 +1777,17 @@ public static class AndroidApiBindings
 	private static DexObject Receiver(object[] args)
 	{
 		return RequireDex(args[0]);
+	}
+
+	/// <summary>Builds a java.io.File guest object for a sandbox directory path.
+	/// The real path lives in the File's actual instance field
+	/// (Ljava/io/File;->path:Ljava/lang/String;) so later bindings (File/FileWriter
+	/// ctors, exists, etc.) can resolve the target without a parallel peer store.</summary>
+	private static DexObject NewFileObject(string path)
+	{
+		var file = new DexObject("Ljava/io/File;");
+		file.InstanceFields["Ljava/io/File;->path:Ljava/lang/String;"] = path;
+		return file;
 	}
 
 	private static DexObject RequireDex(object value)
