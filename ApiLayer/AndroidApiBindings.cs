@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Text;
 using AndroidRuntime.Core.ApiLayer.Bindings;
 using AndroidRuntime.Core.Dex;
@@ -110,6 +111,20 @@ public static class AndroidApiBindings
 		{
 			RequireContext(state, Receiver(args));
 			return NewFileObject(state.FileSandbox.GetCacheDirectory(state.PackageName));
+		});
+		// java.io.File(File parent, String child): the path the sandbox bindings
+		// created is composed with the child through REAL path semantics
+		// (Path.Combine, separator-aware) and stored in the same instance field
+		// the directory bindings use — no parallel peer store. This is the first
+		// File ctor binding; File(String)/File(String,String) can reuse the same
+		// combination helper when they surface.
+		builder.Register(Api("Ljava/io/File;", "<init>", "(Ljava/io/File;Ljava/lang/String;)V"), delegate(AndroidApiInvocation _, object[] args)
+		{
+			DexObject receiver = RequireDex(args[0]);
+			DexObject parent = RequireDex(args[1]);
+			string child = args[2] as string ?? string.Empty;
+			receiver.InstanceFields[FilePathField] = CombineFilePaths(FilePathOf(parent), child);
+			return null!;
 		});
 		// ComponentActivity/Activity.getApplication() -> the session Application.
 		builder.Register(Api("Landroid/app/Activity;", "getApplication", "()Landroid/app/Application;"), delegate(AndroidApiInvocation invocation, object[] args)
@@ -1786,9 +1801,22 @@ public static class AndroidApiBindings
 	private static DexObject NewFileObject(string path)
 	{
 		var file = new DexObject("Ljava/io/File;");
-		file.InstanceFields["Ljava/io/File;->path:Ljava/lang/String;"] = path;
+		file.InstanceFields[FilePathField] = path;
 		return file;
 	}
+
+	private const string FilePathField = "Ljava/io/File;->path:Ljava/lang/String;";
+
+	/// <summary>Reads a java.io.File's path from its instance field; empty when
+	/// the File has none (e.g. a no-arg File never bound a path).</summary>
+	private static string FilePathOf(DexObject file) =>
+		file.InstanceFields.TryGetValue(FilePathField, out object value) && value is string path ? path : string.Empty;
+
+	/// <summary>Real path composition for File(File parent, String child),
+	/// separator-aware (Path.Combine). Future File(String) / File(String, String)
+	/// ctors reuse this.</summary>
+	private static string CombineFilePaths(string parent, string child) =>
+		Path.Combine(parent, child);
 
 	private static DexObject RequireDex(object value)
 	{

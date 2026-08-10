@@ -77,6 +77,43 @@ public sealed class AndroidFileSandboxTests
         Assert.Empty(audit.Entries);
     }
 
+    [Fact]
+    public void File_parent_child_ctor_combines_real_paths()
+    {
+        using var sandbox = new TempFileSandbox();
+        using var state = new AndroidFrameworkState("files", "org.example.app", Owner, new ActivityWindowPeers(), fileSandbox: sandbox);
+        var registry = AndroidApiBindings.CreateBuilder(state, new QuietLog()).Build();
+        var session = new AndroidApiSessionContext(state.SessionId, state.PackageName, state.ActivityDescriptor, CancellationToken.None, () => true);
+
+        DexObject dir = InvokeContext(state, "getExternalFilesDir", "(Ljava/lang/String;)Ljava/io/File;", state.ApplicationContext, null!);
+        var child = new DexObject("Ljava/io/File;");
+        var ctor = new AndroidApiMethodId("Ljava/io/File;", "<init>", "(Ljava/io/File;Ljava/lang/String;)V");
+        registry.Invoke(session, new AndroidApiCallSite(Owner + "->test()V", 0, ctor, ctor, AndroidInvokeKind.Direct), new object[] { child, dir, "fileImplementation.txt" });
+
+        string expected = Path.Combine((string)dir.InstanceFields[FilePathField], "fileImplementation.txt");
+        Assert.Equal(expected, (string)child.InstanceFields[FilePathField]);
+        Assert.Equal("fileImplementation.txt", Path.GetFileName((string)child.InstanceFields[FilePathField]));
+    }
+
+    [Fact]
+    public void File_parent_child_ctor_supports_nested_child_paths()
+    {
+        using var sandbox = new TempFileSandbox();
+        using var state = new AndroidFrameworkState("files", "org.example.app", Owner, new ActivityWindowPeers(), fileSandbox: sandbox);
+        var registry = AndroidApiBindings.CreateBuilder(state, new QuietLog()).Build();
+        var session = new AndroidApiSessionContext(state.SessionId, state.PackageName, state.ActivityDescriptor, CancellationToken.None, () => true);
+
+        DexObject cache = InvokeContext(state, "getCacheDir", "()Ljava/io/File;", state.ApplicationContext);
+        var recording = new DexObject("Ljava/io/File;");
+        var ctor = new AndroidApiMethodId("Ljava/io/File;", "<init>", "(Ljava/io/File;Ljava/lang/String;)V");
+        registry.Invoke(session, new AndroidApiCallSite(Owner + "->test()V", 0, ctor, ctor, AndroidInvokeKind.Direct), new object[] { recording, cache, "sub/recording.m4a" });
+
+        // Path.Combine semantics: the child's separators are preserved verbatim
+        // after the combining separator (mixed separators are valid for real
+        // Windows I/O — no normalization is invented).
+        Assert.Equal(Path.Combine((string)cache.InstanceFields[FilePathField], "sub/recording.m4a"), (string)recording.InstanceFields[FilePathField]);
+    }
+
     private static DexObject InvokeContext(AndroidFrameworkState state, string name, string descriptor, params object[] args)
     {
         var registry = AndroidApiBindings.CreateBuilder(state, new QuietLog()).Build();
