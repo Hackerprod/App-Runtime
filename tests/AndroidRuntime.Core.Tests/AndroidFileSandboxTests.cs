@@ -160,6 +160,24 @@ public sealed class AndroidFileSandboxTests
         Assert.Equal("firstsecond", File.ReadAllText(path));
     }
 
+    [Fact]
+    public void File_getAbsolutePath_returns_the_real_stored_path()
+    {
+        using var sandbox = new TempFileSandbox();
+        using var state = new AndroidFrameworkState("files", "org.example.app", Owner, new ActivityWindowPeers(), fileSandbox: sandbox);
+        var registry = AndroidApiBindings.CreateBuilder(state, new QuietLog()).Build();
+        var session = new AndroidApiSessionContext(state.SessionId, state.PackageName, state.ActivityDescriptor, CancellationToken.None, () => true);
+
+        DexObject dir = InvokeContext(state, "getExternalFilesDir", "(Ljava/lang/String;)Ljava/io/File;", state.ApplicationContext, null!);
+        string stored = (string)dir.InstanceFields[FilePathField];
+
+        var api = new AndroidApiMethodId("Ljava/io/File;", "getAbsolutePath", "()Ljava/lang/String;");
+        object result = registry.Invoke(session, new AndroidApiCallSite(Owner + "->test()V", 0, api, api, AndroidInvokeKind.Virtual), new object[] { dir });
+
+        Assert.Equal(stored, result);
+        Assert.True(Path.IsPathRooted((string)result), "the path is already absolute (sandbox root) — no forcing needed");
+    }
+
     private static void Invoke(AndroidApiRegistry registry, AndroidApiSessionContext session, string owner, string name, string descriptor, AndroidInvokeKind kind, params object[] args)
     {
         var api = new AndroidApiMethodId(owner, name, descriptor);

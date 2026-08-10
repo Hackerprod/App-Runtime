@@ -37,6 +37,7 @@ public static class AndroidApiBindings
 		JavaLangStringBindings.Register(builder, state);
 		JavaLangReflectBindings.Register(builder, state);
 		JavaIoFileWriterBindings.Register(builder, state);
+		AndroidMediaMediaRecorderBindings.Register(builder, state);
 		JavaLangBoxingBindings.Register(builder, state);
 		KotlinTextStringsKtBindings.Register(builder, state);
 		KotlinLazyBindings.Register(builder, state);
@@ -126,6 +127,14 @@ public static class AndroidApiBindings
 			string child = args[2] as string ?? string.Empty;
 			receiver.InstanceFields[FilePathField] = CombineFilePaths(FilePathOf(parent), child);
 			return null!;
+		});
+		// java.io.File.getAbsolutePath(): returns the real instance path. Every
+		// path this runtime produces is already absolute (the sandbox root is an
+		// absolute %LOCALAPPDATA% path) — no GetFullPath forcing needed; a
+		// path-less File returns empty (the honest stored value).
+		builder.Register(Api("Ljava/io/File;", "getAbsolutePath", "()Ljava/lang/String;"), delegate(AndroidApiInvocation _, object[] args)
+		{
+			return FilePathOf(RequireDex(args[0]));
 		});
 		// ComponentActivity/Activity.getApplication() -> the session Application.
 		builder.Register(Api("Landroid/app/Activity;", "getApplication", "()Landroid/app/Application;"), delegate(AndroidApiInvocation invocation, object[] args)
