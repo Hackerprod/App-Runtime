@@ -87,7 +87,9 @@ public sealed class AndroidInflateBridgeTests
         Assert.Equal("Ready", service.ResolveResource(text.Value.Data).String);
 
         // resolve_style: a missing/framework style returns null; a present
-        // style returns one link (parent + raw attrs).
+        // style returns one link (parent + raw attrs) WITH attribute names
+        // resolved (the native apply_attr matches by name — null names broke
+        // style-bag application, which is the fix under test).
         Assert.Null(service.ResolveStyle(0x7f10ffff));
         Assert.Null(service.ResolveStyle(0x01030258));
         AndroidResourceStyleLink? link = service.ResolveStyle(0x7f100001);
@@ -95,6 +97,9 @@ public sealed class AndroidInflateBridgeTests
         {
             Assert.NotNull(link.Attributes);
             Assert.NotEqual(0u, link.ParentStyleId);
+            // Every style attr must carry its short name OR be resolvable by id.
+            foreach (var attr in link.Attributes)
+                Assert.True(attr.Name is not null || attr.ResourceId != 0, $"style attr missing both name and id: 0x{attr.ResourceId:X8}");
         }
 
         // fetch_file: the layout resource file is present as raw bytes.

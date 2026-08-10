@@ -43,7 +43,9 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
             var options = new AndroidUiOptions { density = 1f, scaled_density = 1f };
             int createStatus = ViewRuntimeBridgeNative.android_ui_create(ref options, out nint ui);
             _ui = createStatus == 0 ? ui : 0;
-            _surface = ViewRuntimeBridgeNative.viewruntime_surface_create(null);
+            // A real TrueType font makes draw_text render glyphs; null would make
+            // ViewRuntime paint a solid block instead of text (the pink-block bug).
+            _surface = ViewRuntimeBridgeNative.viewruntime_surface_create(ViewRuntimeBridgeNative.PickSystemFont());
             _available = _ui != 0 && _surface != 0;
             if (_available)
             {

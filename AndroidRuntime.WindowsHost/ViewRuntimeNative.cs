@@ -1,4 +1,5 @@
 #nullable enable
+using System.IO;
 using System.Runtime.InteropServices;
 using AndroidRuntime.Core.Ui;
 
@@ -153,6 +154,20 @@ internal static partial class ViewRuntimeBridgeNative
 
     [LibraryImport(Dll, StringMarshalling = StringMarshalling.Utf8)]
     internal static partial void string_free(nint text);
+
+    /// <summary>Picks a real Windows TrueType font for the native surface so
+    /// draw_text renders actual glyphs (Phase 1's helper, recreated for Phase 2 —
+    /// a null font makes ViewRuntime paint a solid block instead of text).</summary>
+    internal static string? PickSystemFont()
+    {
+        string windowsFonts = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+        foreach (string candidate in new[] { "segoeui.ttf", "arial.ttf", "tahoma.ttf", "times.ttf" })
+        {
+            string path = Path.Combine(windowsFonts, candidate);
+            if (File.Exists(path)) return path;
+        }
+        return null;
+    }
 }
 
 [StructLayout(LayoutKind.Sequential)]
