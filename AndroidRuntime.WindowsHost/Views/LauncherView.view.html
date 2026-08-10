@@ -1,0 +1,37 @@
+<body>
+  <style>{{ IconStyles }}</style>
+
+  <nav class="navbar">
+    <span class="brand">Android Runtime</span>
+    <div class="nav-menu">
+      <button type="button" class="menu-item" id="menuInstall" onclick="OpenInstaller">Install APK</button>
+      <button type="button" class="menu-item" id="menuRefresh" onclick="RefreshApps">Refresh</button>
+    </div>
+  </nav>
+
+  <main class="content">
+    <template a:if="{{ InstalledApps.Count == 0 }}">
+      <div class="empty-state" id="emptyState" onclick="OpenInstaller">
+        <div class="empty-icon">＋</div>
+        <p class="empty-title">No apps installed</p>
+        <p class="empty-hint">Click to choose an APK to install</p>
+      </div>
+    </template>
+
+    <div class="app-grid">
+      <template a:for="app in InstalledApps">
+        <div class="app-tile"
+             id="{{ TileId(app.Package) }}"
+             onclick="OpenApp"
+             onmouseover="TileOver"
+             onmouseout="TileOut">
+          <div class="app-icon" id="{{ IconId(app.Package) }}"></div>
+          <span class="app-name">{{ app.DisplayName }}</span>
+          <button type="button" class="{{ UninstallClass(app.Package) }}" id="{{ UninstallId(app.Package) }}" onclick="UninstallApp">×</button>
+        </div>
+      </template>
+    </div>
+
+    <p class="status-bar" id="status">{{ Status }}</p>
+  </main>
+</body>

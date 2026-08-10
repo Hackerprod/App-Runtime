@@ -1,13 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <UseWPF>true</UseWPF>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\AndroidRuntime.Core.csproj" />
@@ -17,6 +19,18 @@
          (the MF AAC encoder is built into Windows 8+; NAudio is MIT, the
          standard .NET audio library). -->
     <PackageReference Include="NAudio" Version="2.2.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- AetherUI: the HTML/CSS/C# UI engine powering the installed-apps launcher
+         (docs\installer-launcher-design.md). Referenced directly after the
+         net10 migration; the Generator compiles .cshtml views at build time and
+         aether_core.dll (native core) deploys via AetherUI.Core.Native.Interop. -->
+    <ProjectReference Include="..\..\AetherUI\bindings\dotnet\src\AetherUI.Core\AetherUI.Core.csproj" />
+    <ProjectReference Include="..\..\AetherUI\bindings\dotnet\src\AetherUI.Windows\AetherUI.Windows.csproj" />
+    <ProjectReference Include="..\..\AetherUI\bindings\dotnet\src\AetherUI.Generator\AetherUI.Generator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+    <AdditionalFiles Include="Views/**/*.cshtml;Views/**/*.view.html;Views/**/*.view.css" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="AndroidRuntime.WindowsHost.Tests" />
@@ -29,6 +43,7 @@
          needed unless Ui\ViewRuntime\src changes. -->
     <None Include="..\Ui\ViewRuntime\build\dev\Debug\viewruntime_core.dll"
           CopyToOutputDirectory="PreserveNewest"
-          Link="viewruntime_core.dll" />
+          Link="viewruntime_core.dll"
+          Condition="Exists('..\Ui\ViewRuntime\build\dev\Debug\viewruntime_core.dll')" />
   </ItemGroup>
 </Project>

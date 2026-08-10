@@ -58,8 +58,13 @@ public sealed class WpfActivityWindowFactory : IActivityWindowFactory, IDisposab
             {
                 // Phone-shaped portrait window matching the reference device's
                 // 1080x2196 display (aspect 0.4918 = 360x732 DIP at 3x density).
+                // FIXED-SIZE per the selected device preset (docs\installer-
+                // launcher-design.md: "fixed-size-per-preset-only"): dragging the
+                // edges would change the resolution the guest reports, so the
+                // app window is NOT user-resizable.
                 Width = 360,
                 Height = 732,
+                ResizeMode = ResizeMode.NoResize,
                 Title = packageName,
                 WindowStartupLocation = WindowStartupLocation.CenterScreen,
                 Content = root

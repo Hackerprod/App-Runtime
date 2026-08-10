@@ -159,7 +159,7 @@ public sealed class AndroidFrameworkState : IDisposable
         Power = power ?? new UnavailableAndroidPower();
         ViewBridge = viewBridge ?? UnavailableAndroidViewBridge.Instance;
         Resources = resources;
-        DisplayState = AndroidDisplayState.Default;
+        DisplayState = AndroidDisplayState.Reference;
         ResourceQueries = resourceQueries;
         StringBuilders = new AndroidPeerStore<StringBuilder>("StringBuilder", PeerLimits.StringBuilders);
         Bundles = new AndroidPeerStore<BundlePeer>("Bundle", PeerLimits.Bundles);

@@ -4,6 +4,9 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Win32.SafeHandles;
+using AetherUI.Primitives;
+using AetherUI.Runtime;
+using AetherUI.Windows.Hosting;
 using AndroidRuntime.Core;
 using AndroidRuntime.Core.ApiLayer;
 using AndroidRuntime.Core.Hosting;
@@ -38,8 +41,163 @@ public static class Program
 
     private static async Task<int> RunAsync(string[] args)
     {
+        // Installer + launcher commands (docs\installer-launcher-design.md).
+        if (args.Length == 0)
+            return RunLauncher();
+        switch (args[0])
+        {
+            case "--install":
+                return RunInstall(args);
+            case "--launch":
+                return await RunLaunchAsync(args).ConfigureAwait(false);
+            case "--launch-file":
+                return await RunLaunchFileAsync(args).ConfigureAwait(false);
+            case "--list-installed":
+                return RunListInstalled();
+            case "--uninstall":
+                return RunUninstall(args);
+            case "--register-file-association":
+                return RunRegisterAssociation();
+        }
         var options = Parse(args);
-        using var traceOutput = TraceOutputLease.Open(options.ApkPath, options.TracePath);
+        return await LaunchAsync(options.ApkPath, options).ConfigureAwait(false);
+    }
+
+    private static int RunInstall(string[] args)
+    {
+        // --install <apk> [--launcher-dir <dir>]
+        if (args.Length < 2)
+            throw new ArgumentException("Usage: --install <apk> [--launcher-dir <dir>]");
+        string? launcherDir = null;
+        for (int index = 2; index < args.Length; index++)
+            if (args[index] == "--launcher-dir" && index + 1 < args.Length)
+                launcherDir = args[++index];
+        InstalledApp app = AndroidInstaller.Install(args[1], launcherDir);
+        FileAssociation.Register(); // after install so the DefaultIcon finds the extracted icon
+        Console.WriteLine($"INSTALLED package={app.Package} apk={app.InstalledApkPath} launcher={app.LauncherFilePath}");
+        return 0;
+    }
+
+    private static int RunListInstalled()
+    {
+        IReadOnlyList<string> packages = AndroidInstaller.ListInstalled();
+        if (packages.Count == 0)
+        {
+            Console.WriteLine("INSTALLED_APPS 0");
+            return 0;
+        }
+        Console.WriteLine($"INSTALLED_APPS {packages.Count}");
+        foreach (string package in packages)
+            Console.WriteLine(package);
+        return 0;
+    }
+
+    private static int RunUninstall(string[] args)
+    {
+        if (args.Length < 2)
+            throw new ArgumentException("Usage: --uninstall <package>");
+        AndroidInstaller.Uninstall(args[1]);
+        Console.WriteLine($"UNINSTALLED {args[1]}");
+        return 0;
+    }
+
+    private static int RunRegisterAssociation()
+    {
+        bool wrote = FileAssociation.Register();
+        Console.WriteLine(wrote ? "REGISTERED .apkr association" : "REGISTERED .apkr association (already current)");
+        return 0;
+    }
+
+    private static int RunLauncher()
+    {
+        FileAssociation.Register();
+        // Primary UI: the AetherUI launcher (installed-apps view). Falls back to
+        // the WPF window only when the AetherUI native core is unavailable.
+        try
+        {
+            return WindowsUiApplication.Run<AndroidRuntime.WindowsHost.Views.LauncherView>(new UiHostOptions
+            {
+                Title = "Android Runtime",
+                Width = 900,
+                Height = 680,
+                MinimumWidth = 520,
+                MinimumHeight = 460,
+                ClearColor = new ColorRgba(0.965f, 0.973f, 0.984f, 1f),
+                // AetherUI's own Windows image loader, wrapped to strip the
+                // quotes the engine leaves on url('...') background-image
+                // sources before they reach the resolver (verified: the raw
+                // quoted URI is rejected by policy, the clean one decodes).
+                // AetherUI's own Windows image loader decodes file:// icon
+                // paths through the engine's native pipeline. The engine-side
+                // fix for its HTML-encoded url('...') quoting (tracked by the
+                // AetherUI maintainer) makes this the only loader needed.
+                ImageResolver = new ImageResourceResolver(new AetherUI.Windows.Resources.FileImageResourceLoader()),
+            });
+        }
+        catch (DllNotFoundException)
+        {
+            // AetherUI native core missing — degrade to the WPF fallback window.
+        }
+        catch (BadImageFormatException)
+        {
+        }
+        catch (EntryPointNotFoundException)
+        {
+        }
+        var window = new LauncherWindow();
+        window.ShowDialog();
+        return 0;
+    }
+
+    private static async Task<int> RunLaunchAsync(string[] args)
+    {
+        // --launch <package> [options]
+        if (args.Length < 2)
+            throw new ArgumentException("Usage: --launch <package> [options]");
+        string package = args[1];
+        string? apk = AndroidInstaller.ResolveApk(package);
+        if (apk is null)
+        {
+            Console.Error.WriteLine("App is not installed: " + package);
+            return 2;
+        }
+        var options = Parse(RebaseArgs(apk, args, skip: 2));
+        return await LaunchAsync(apk, options).ConfigureAwait(false);
+    }
+
+    private static async Task<int> RunLaunchFileAsync(string[] args)
+    {
+        // --launch-file <file.apkr> [options]
+        if (args.Length < 2)
+            throw new ArgumentException("Usage: --launch-file <file.apkr> [options]");
+        if (!AndroidApkrFile.TryRead(args[1], out AndroidApkrFile? launcher) || launcher is null)
+        {
+            Console.Error.WriteLine("Invalid launcher file: " + args[1]);
+            return 2;
+        }
+        string? apk = AndroidInstaller.ResolveApk(launcher.Package);
+        if (apk is null)
+        {
+            Console.Error.WriteLine("App is not installed: " + launcher.Package);
+            return 2;
+        }
+        var options = Parse(RebaseArgs(apk, args, skip: 2));
+        return await LaunchAsync(apk, options).ConfigureAwait(false);
+    }
+
+    /// <summary>Rebuilds the argument list with the resolved apk first so the
+    /// existing option parser is reused unchanged: [apk, ...remaining].</summary>
+    private static string[] RebaseArgs(string apkPath, string[] args, int skip)
+    {
+        var result = new string[1 + (args.Length - skip)];
+        result[0] = apkPath;
+        Array.Copy(args, skip, result, 1, args.Length - skip);
+        return result;
+    }
+
+    private static async Task<int> LaunchAsync(string apkPath, HostOptions options)
+    {
+        using var traceOutput = TraceOutputLease.Open(apkPath, options.TracePath);
         using var capabilityAudit = options.CapabilityAuditPath is string auditPath ? new FileAndroidCapabilityAuditSink(auditPath) : null;
         using var audioRecorder = new WindowsAudioRecorder();
         using var factory = new WpfActivityWindowFactory();

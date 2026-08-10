@@ -20,7 +20,7 @@ public sealed class AndroidManifestActivity
 
 public sealed class AndroidManifest
 {
-    internal AndroidManifest(string packageName, IReadOnlyList<AndroidManifestActivity> activities, AndroidManifestActivity launcher, IReadOnlyCollection<string> permissions, int targetSdkVersion, int applicationThemeStyleId)
+    internal AndroidManifest(string packageName, IReadOnlyList<AndroidManifestActivity> activities, AndroidManifestActivity launcher, IReadOnlyCollection<string> permissions, int targetSdkVersion, int applicationThemeStyleId, string? applicationLabel = null, int? applicationLabelResourceId = null, int? applicationIconResourceId = null)
     {
         PackageName = packageName;
         Activities = Array.AsReadOnly(activities.ToArray());
@@ -29,6 +29,9 @@ public sealed class AndroidManifest
         UsesPermissions = Array.AsReadOnly(permissions.Distinct(StringComparer.Ordinal).ToArray());
         TargetSdkVersion = targetSdkVersion;
         ApplicationThemeStyleId = applicationThemeStyleId;
+        ApplicationLabel = applicationLabel;
+        ApplicationLabelResourceId = applicationLabelResourceId;
+        ApplicationIconResourceId = applicationIconResourceId;
     }
 
     public string PackageName { get; }
@@ -42,6 +45,19 @@ public sealed class AndroidManifest
     /// Phase 2: ViewRuntime resolves ?attr/... by walking this style id through
     /// the bridge's resolve_style callback — the theme IS a style chain.</summary>
     public int ApplicationThemeStyleId { get; }
+
+    /// <summary>The application's display label: the literal android:label string
+    /// when the manifest declared one, otherwise null (a label resource
+    /// reference is exposed via <see cref="ApplicationLabelResourceId"/>).</summary>
+    public string? ApplicationLabel { get; }
+
+    /// <summary>android:label as a string-resource reference id (0/null when the
+    /// label was a literal or absent). Resolve via AndroidResourceResolver.</summary>
+    public int? ApplicationLabelResourceId { get; }
+
+    /// <summary>android:icon resource reference id (mipmap/drawable), or null
+    /// when the manifest declares no icon.</summary>
+    public int? ApplicationIconResourceId { get; }
 }
 
 /// <summary>Strict reader for the bounded binary XML subset needed to discover an APK launcher Activity.</summary>
@@ -88,6 +104,9 @@ public static class AndroidManifestReader
         int minSdkVersion = 1;
         int? declaredTargetSdkVersion = null;
         int applicationThemeStyleId = 0;
+        string? applicationLabel = null;
+        int? applicationLabelResourceId = null;
+        int? applicationIconResourceId = null;
 
         int offset = root.HeaderSize;
         while (offset < root.Size)
@@ -213,6 +232,12 @@ public static class AndroidManifestReader
                         // reference to a style resource. ViewRuntime resolves
                         // ?attr/... by walking this style id (theme == style chain).
                         applicationThemeStyleId = FindReferenceAttribute(attributes, AndroidNamespace, "theme") ?? 0;
+                        // Display identity (installer/launcher): android:label can
+                        // be a literal string OR a string-resource reference;
+                        // android:icon is a resource reference (mipmap/drawable).
+                        applicationLabel = FindAttribute(attributes, AndroidNamespace, "label");
+                        applicationLabelResourceId = FindReferenceAttribute(attributes, AndroidNamespace, "label");
+                        applicationIconResourceId = FindReferenceAttribute(attributes, AndroidNamespace, "icon");
                     }
                     else if (elementName == "intent-filter" && frames.Count > 0 &&
                              frames[^1].Name == "activity" && frames[^1].ActivityIndex >= 0)
@@ -267,7 +292,7 @@ public static class AndroidManifestReader
             throw Invalid("manifest package must not be empty");
         var launcher = activities.FirstOrDefault(activity => activity.IsLauncher)
             ?? throw Invalid("manifest does not declare an activity with MAIN and LAUNCHER in the same intent-filter");
-        return new AndroidManifest(packageName, activities.AsReadOnly(), launcher, permissions.ToArray(), declaredTargetSdkVersion ?? minSdkVersion, applicationThemeStyleId);
+        return new AndroidManifest(packageName, activities.AsReadOnly(), launcher, permissions.ToArray(), declaredTargetSdkVersion ?? minSdkVersion, applicationThemeStyleId, applicationLabel, applicationLabelResourceId, applicationIconResourceId);
     }
 
     public static string ToDexDescriptor(string packageName, string declaredActivityName)

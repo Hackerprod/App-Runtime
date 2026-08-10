@@ -1,0 +1,214 @@
+html, body {
+  width: 100%;
+  height: 100vh;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100vh;
+  background-color: #f6f8fb;
+  color: #1f2937;
+  font-family: "Segoe UI";
+}
+
+/* ── Navbar ─────────────────────────────────────────────── */
+.navbar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  padding: 0 24px;
+  border-bottom: 1px solid #e5e7eb;
+  background-color: #ffffff;
+}
+
+.brand {
+  font-size: 16px;
+  font-weight: 700;
+  color: #111827;
+  letter-spacing: 0.2px;
+}
+
+.nav-menu {
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+}
+
+.menu-item {
+  height: 34px;
+  min-width: 0;
+  padding: 0 14px;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  background-color: transparent;
+  color: #4b5563;
+}
+
+.menu-item:hover {
+  background-color: #eef2f7;
+  color: #111827;
+}
+
+/* ── Content ────────────────────────────────────────────── */
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 28px;
+  overflow: hidden;
+}
+
+/* Empty state: centered, pretty, click-to-install card. */
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  width: 100%;
+  max-width: 420px;
+  border: 2px dashed #c7d2e0;
+  border-radius: 18px;
+  background-color: #ffffff;
+  cursor: pointer;
+}
+
+.empty-state:hover {
+  border-color: #2563eb;
+  background-color: #f8faff;
+}
+
+.empty-icon {
+  font-size: 42px;
+  font-weight: 300;
+  color: #2563eb;
+  margin-bottom: 12px;
+  line-height: 1;
+}
+
+.empty-title {
+  margin: 0 0 6px 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.empty-hint {
+  margin: 0;
+  font-size: 14px;
+  color: #6b7280;
+}
+
+/* App grid — Android-style tiles: icon with the name BELOW it. */
+.content > .app-grid,
+.app-grid {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 20px;
+}
+
+.app-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 96px;
+  padding: 14px 10px 10px 10px;
+  border-radius: 14px;
+  background-color: transparent;
+  cursor: pointer;
+}
+
+.app-tile:hover {
+  background-color: #eef2f7;
+}
+
+.app-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background-color: #e5e7eb;
+  margin-bottom: 8px;
+}
+
+.app-name {
+  max-width: 88px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #374151;
+  text-align: center;
+  overflow: hidden;
+}
+
+.tile-uninstall {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  background-color: #e11d48;
+  color: #ffffff;
+  visibility: hidden;
+}
+
+.tile-uninstall.visible {
+  visibility: visible;
+}
+
+.tile-uninstall:hover {
+  background-color: #be123c;
+}
+
+button.open-button {
+  height: 36px;
+  min-width: 88px;
+  margin-right: 8px;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  background-color: #2563eb;
+  color: #ffffff;
+}
+
+button.open-button:hover {
+  background-color: #1d4ed8;
+}
+
+button.uninstall-button {
+  height: 36px;
+  min-width: 92px;
+  border: 1px solid #fca5a5;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  background-color: #ffffff;
+  color: #dc2626;
+}
+
+button.uninstall-button:hover {
+  background-color: #fef2f2;
+}
+
+.status-bar {
+  margin-top: 16px;
+  font-size: 13px;
+  color: #6b7280;
+}

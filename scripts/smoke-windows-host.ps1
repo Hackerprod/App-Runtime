@@ -7,7 +7,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$exe = (Resolve-Path (Join-Path $projectRoot "AndroidRuntime.WindowsHost\bin\$Configuration\net8.0-windows\AndroidRuntime.WindowsHost.exe")).Path
+$exe = (Resolve-Path (Join-Path $projectRoot "AndroidRuntime.WindowsHost\bin\$Configuration\net10.0-windows10.0.19041.0\AndroidRuntime.WindowsHost.exe")).Path
 $apk = (Resolve-Path (Join-Path $projectRoot 'tests\AndroidRuntime.Core.Tests\Fixtures\RuntimeProbe.apk')).Path
 $evidenceDirectory = Join-Path $projectRoot 'artifacts\smoke'
 New-Item -ItemType Directory -Force $evidenceDirectory | Out-Null

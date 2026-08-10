@@ -197,4 +197,20 @@ public readonly record struct AndroidDisplayState(
         ScreenLayout: 0x20,
         UiMode: 0x11,
         FontScale: 1.0f);
+
+    /// <summary>The reference device shape (docs\installer-launcher-design.md):
+    /// 1080x2196px at 3x density = 360x732dp portrait — exactly the dp size the
+    /// WpfActivityWindowFactory opens. ONE source of truth for every guest
+    /// display query (Configuration / DisplayMetrics / WindowManager), replacing
+    /// the previous independently-hardcoded 720x1280 baseline.</summary>
+    public static AndroidDisplayState Reference { get; } = new(
+        ScreenWidthPx: 1080,
+        ScreenHeightPx: 2196,
+        DensityDpi: 480,
+        ScreenWidthDp: 360,
+        ScreenHeightDp: 732,
+        Orientation: 1,
+        ScreenLayout: 0x20,
+        UiMode: 0x11,
+        FontScale: 1.0f);
 }
