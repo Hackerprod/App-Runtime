@@ -70,6 +70,71 @@ static void test_font_measures() {
     android_ui_measure_text(ui, "Ejecuta", 13.f, 99999.f, &first);
     EXPECT(first.width < wide.width * 0.5f);
 
+    /* Regression: paragraphs separated by '\n' — AOSP getDesiredWidthWithLimit
+     * measures EACH paragraph and takes the max (Layout.java:277-291). Before
+     * the fix, the width of a paragraph ending in '\n' was discarded (maxed
+     * against 0 after the reset), so "ab\ncd" reported only the width of "cd".
+     * Here "ab" is wider than "cd", so the total must be ~w("ab"). */
+    android_text_metrics_t pa{}, pb{}, multi{};
+    android_ui_measure_text(ui, "ab", 13.f, 99999.f, &pa);
+    android_ui_measure_text(ui, "cd", 13.f, 99999.f, &pb);
+    android_ui_measure_text(ui, "ab\ncd", 13.f, 99999.f, &multi);
+    EXPECT(multi.width >= pa.width); /* paragraph 1 width is kept */
+    EXPECT(multi.width >= pb.width); /* paragraph 2 width is kept */
+    EXPECT(multi.height > pa.height); /* two lines */
+    /* A trailing newline must still report the paragraph width, not 0. */
+    android_text_metrics_t trail{};
+    android_ui_measure_text(ui, "ab\n", 13.f, 99999.f, &trail);
+    EXPECT(trail.width >= pa.width);
+
+    /* Regression (audit round 4, BUG 1+2): AOSP getLineVisibleEnd strips
+     * ALL trailing whitespace from non-last lines (Layout.java:2767-2793),
+     * but only what actually ENDS the line. An INTERNAL space ("aa bb")
+     * is kept; the old code subtracted exactly one space unconditionally
+     * at '\n' (measure "aa bb\n" as 80 instead of 85) and also on wrapped
+     * lines. */
+    android_text_metrics_t internal{}, no_trail{}, multi_sp{};
+    android_ui_measure_text(ui, "aa bb", 13.f, 99999.f, &internal); /* internal space kept */
+    android_ui_measure_text(ui, "aa bb\n", 13.f, 99999.f, &no_trail); /* trailing \n: same width */
+    EXPECT_NEAR(no_trail.width, internal.width, 0.01f);
+    /* "aa   \n" — three trailing spaces: ALL must be stripped (old code
+     * stripped exactly one). "aa" alone is the visible width. */
+    android_ui_measure_text(ui, "aa", 13.f, 99999.f, &multi_sp);
+    android_ui_measure_text(ui, "aa   \n", 13.f, 99999.f, &trail);
+    EXPECT_NEAR(trail.width, multi_sp.width, 0.01f);
+
+    /* Regression (audit round 4, BUG 3): max_width<=0 on a multi-paragraph
+     * string reports one line PER PARAGRAPH (Layout.java:230-231) — the old
+     * code returned a single line height. */
+    android_text_metrics_t one_line{};
+    android_ui_measure_text(ui, "a", 13.f, 99999.f, &one_line);
+    android_ui_measure_text(ui, "a\nb", 13.f, 99999.f, &multi);
+    EXPECT_NEAR(multi.height, one_line.height * 2.f, one_line.height * 0.1f);
+
+    /* Regression (audit round 5, LOW): AOSP NEVER breaks a line AT a space —
+     * the break happens when the NEXT word does not fit (StaticLayout breaks
+     * only at a break opportunity with a following word). A trailing space
+     * must NOT create a phantom extra line: "ab " with max ∈ [w_ab,
+     * w_ab+w_s) is ONE line, not two. */
+    android_text_metrics_t ab{}, ab_trail{}, ab_nl{};
+    android_ui_measure_text(ui, "ab", 13.f, 99999.f, &ab);
+    /* max just wide enough for "ab" but not "ab " — the trailing space must
+     * not push the line count to 2. */
+    android_ui_measure_text(ui, "ab ", 13.f, ab.width, &ab_trail);
+    EXPECT_NEAR(ab_trail.height, ab.height, ab.height * 0.1f);
+    /* "ab \n" → exactly 2 lines ("ab " + empty), not 3. */
+    android_ui_measure_text(ui, "ab \n", 13.f, ab.width, &ab_nl);
+    EXPECT_NEAR(ab_nl.height, ab.height * 2.f, ab.height * 0.1f);
+
+    /* Regression (audit round 7, MEDIUM): a UTF-8 string truncated mid
+     * multi-byte sequence must not read out of bounds. "a\xC2" (lead byte
+     * with NO continuation) and "a\xF0\x9F\x98" (3 of 4 bytes) must decode
+     * safely — the old utf8_decode read s[1]/s[2]/s[3] past the '\0'. */
+    android_ui_measure_text(ui, "a\xC2", 13.f, 99999.f, &ab_trail);
+    EXPECT(ab_trail.width >= 0.f);
+    android_ui_measure_text(ui, "a\xF0\x9F\x98", 13.f, 99999.f, &ab_nl);
+    EXPECT(ab_nl.width >= 0.f);
+
     android_ui_destroy(ui);
 }
 

@@ -45,12 +45,50 @@ VIEWRUNTIME_BACKEND_API void viewruntime_draw_fill_rect(
 VIEWRUNTIME_BACKEND_API void viewruntime_draw_fill_rounded_rect(
     void* surface, float x, float y, float w, float h,
     float radius_px, uint8_t a, uint8_t r, uint8_t g, uint8_t b, int32_t view_id);
+/* Rounded-rect fill with a LINEAR gradient between two colors along the
+ * orientation axis given by angle (0=left→right, 90=bottom→top, 270=top→
+ * bottom — AOSP GradientDrawable angle→Orientation, java:1822-1851, with the
+ * Skia LinearGradient CLAMP semantics: t = clamp(projection,0,1), color =
+ * lerp(start,end,t)). radius_px clamps like GradientDrawable.java:823. */
+VIEWRUNTIME_BACKEND_API void viewruntime_draw_fill_rounded_rect_gradient(
+    void* surface, float x, float y, float w, float h,
+    float radius_px, int32_t angle_deg,
+    uint8_t a0, uint8_t r0, uint8_t g0, uint8_t b0,
+    uint8_t a1, uint8_t r1, uint8_t g1, uint8_t b1, int32_t view_id);
+/* Rounded-rect STROKE (border) — GradientDrawable's mStrokePaint drawn over
+ * the same rect as the fill with the same corner radius
+ * (GradientDrawable.java:825-827 drawRoundRect(mRect, rad, rad,
+ * mStrokePaint)). width_px is the border thickness; dash 0 = solid. */
+VIEWRUNTIME_BACKEND_API void viewruntime_draw_stroke_rounded_rect(
+    void* surface, float x, float y, float w, float h,
+    float radius_px, float width_px, float dash_width_px, float dash_gap_px,
+    uint8_t a, uint8_t r, uint8_t g, uint8_t b, int32_t view_id);
+/* OVAL fill — GradientDrawable OVAL shape (java:839-844 canvas.drawOval):
+ * the ellipse inscribed in the box. */
+VIEWRUNTIME_BACKEND_API void viewruntime_draw_fill_oval(
+    void* surface, float x, float y, float w, float h,
+    uint8_t a, uint8_t r, uint8_t g, uint8_t b, int32_t view_id);
+/* OVAL fill with a LINEAR gradient — GradientDrawable OVAL shape drawn with
+ * the LinearGradient shader (java:840 drawOval(mRect, mFillPaint)). A REAL
+ * ellipse (rx=w/2, ry=h/2), NOT a rounded rect (a rounded rect with
+ * radius min(w,h)/2 degenerates into a stadium for w != h). Same axis/lerp
+ * semantics as viewruntime_draw_fill_rounded_rect_gradient. */
+VIEWRUNTIME_BACKEND_API void viewruntime_draw_fill_oval_gradient(
+    void* surface, float x, float y, float w, float h,
+    int32_t angle_deg,
+    uint8_t a0, uint8_t r0, uint8_t g0, uint8_t b0,
+    uint8_t a1, uint8_t r1, uint8_t g1, uint8_t b1, int32_t view_id);
+/* LINE fill — GradientDrawable LINE shape (java:845-851): a horizontal line
+ * at the vertical center, stroke width thick. */
+VIEWRUNTIME_BACKEND_API void viewruntime_draw_fill_line(
+    void* surface, float x, float y, float w, float h,
+    float width_px, uint8_t a, uint8_t r, uint8_t g, uint8_t b, int32_t view_id);
 VIEWRUNTIME_BACKEND_API void viewruntime_draw_text(
     void* surface, float x, float y, float w, float h,
     const uint16_t* utf16_text, int32_t text_len,
     float text_size_px, uint8_t a, uint8_t r, uint8_t g, uint8_t b,
     int32_t view_id,
-    int32_t text_align, int32_t bold);
+    int32_t text_align, int32_t bold, int32_t wrap);
 /* Upload (or replace) a decoded image under `source`. Pixels are straight
  * ARGB8888, row-major, width*4 pitch. The surface owns a copy; call again
  * with the same source to update it. */

@@ -170,6 +170,17 @@ typedef struct {
 #define ANDROID_SHOW_DIVIDER_MIDDLE    2
 #define ANDROID_SHOW_DIVIDER_END       4
 
+/* GradientDrawable shapes (GradientDrawable.java:111-126). */
+#define ANDROID_SHAPE_RECTANGLE 0
+#define ANDROID_SHAPE_OVAL      1
+#define ANDROID_SHAPE_LINE      2
+#define ANDROID_SHAPE_RING      3
+
+/* GradientDrawable gradient types (GradientDrawable.java:136-146). */
+#define ANDROID_GRADIENT_LINEAR 0
+#define ANDROID_GRADIENT_RADIAL 1
+#define ANDROID_GRADIENT_SWEEP  2
+
 /* ImageView scale types — realigned to AOSP ImageView.ScaleType ordering
  * (MATRIX=0, FIT_XY=1, FIT_START=2, FIT_CENTER=3, FIT_END=4, CENTER=5,
  * CENTER_CROP=6, CENTER_INSIDE=7). */

@@ -141,6 +141,23 @@ const android_attr_t kGradientBgAttrs[2] = {
      {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF111A33)}},
 };
 
+/* Regression bags (audit round 7): a shape with <corners android:radius=8
+ * android:topLeftRadius=4/> and <stroke android:width=2dp/> (NO color).
+ * AOSP: absent per-corners fall back to the UNIFORM radius
+ * (getDimensionPixelSize(name, radius), GradientDrawable.java:1668-1675);
+ * a stroke without color paints OPAQUE BLACK (Paint default,
+ * GradientDrawable.java:754-755 + 2413-2423). */
+const android_attr_t kPerCornerStrokeAttrs[4] = {
+    {"radius", 0x010101a3,
+     {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 8.f, ANDROID_DIMEN_UNIT_DIP, 0}},
+    {"topLeftRadius", 0x010101a4,
+     {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 4.f, ANDROID_DIMEN_UNIT_DIP, 0}},
+    {"strokeWidth", 0x010101b1,
+     {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 2.f, ANDROID_DIMEN_UNIT_DIP, 0}},
+    {"shape", 0x01010063,
+     {ANDROID_RAW_TYPE_INT_DEC, nullptr, 0, 0.f, 0, 0}}, /* RECTANGLE */
+};
+
 /* ColorStateList textColor file (SKYNET abc_btn_colored_text_material):
  * <selector><item state_enabled=false color=?android:textColorHighlight/>
  * <item (stateless) color=?android:textColorPrimary/></selector> — the
@@ -203,6 +220,9 @@ bool_t stub_resolve_style(uint32_t id, const android_attr_t** out,
             return true;
         case 0x7f010006:
             *out = kGradientBgAttrs; *count = 2; *parent = 0;
+            return true;
+        case 0x7f010007:
+            *out = kPerCornerStrokeAttrs; *count = 4; *parent = 0;
             return true;
         case 0x7f050003:
             /* The color-selector file: served as a bag under the SAME id as
@@ -760,6 +780,13 @@ void test_inflate_text_paints_real_glyphs() {
     /* Real Arial "AB" at 16px is ~18px; the proportional fallback is also
      * ~18px, so the discriminator is the render below, not just width. */
 
+    /* Layout the tree first: a view must have real laid-out bounds for the
+     * render clip (View.java:24905 canvas.clipRect). Rendering an unlaid-out
+     * view (bounds 0x0) paints nothing — with the old no-clip draw the text
+     * bled into the surface regardless. */
+    expect_ok(android_ui_measure(ui, root, 64.f, 24.f), "measure");
+    expect_ok(android_ui_layout(ui, root, 0.f, 0.f, 64.f, 24.f), "layout");
+
     display_list_t list = nullptr;
     expect_ok(android_ui_record(ui, root, &list), "record");
     expect_ok(android_ui_render(ui, list), "render");
@@ -1303,6 +1330,128 @@ void test_inflate_button_pressed_color_swap() {
     return;
 }
 
+/* Regression (audit round 5, HIGH): the display-list UTF-8→UTF-16 converter
+ * must handle a supplementary-plane character (>= 0x10000, e.g. emoji U+1F600
+ * = bytes F0 9F 98 80) by emitting a surrogate pair AND advancing 4 bytes.
+ * The old code `continue`d inside the 4-byte branch before `p += 4`, so any
+ * emoji caused an infinite loop + heap overflow (n grew past the len+1
+ * buffer). Rendering a TextView whose text contains an emoji must complete. */
+void test_inflate_text_with_emoji_completes() {
+    android_ui_options_t opts{};
+    opts.density = 1.f;
+    opts.scaled_density = 1.f;
+    android_ui_t ui = nullptr;
+    expect_ok(android_ui_create(&opts, &ui), "create ui");
+    android_ui_set_resource_bridge(ui, stub_resolve_resource,
+                                   stub_resolve_style, stub_fetch_file, nullptr);
+    void* surface = viewruntime_surface_create(nullptr);
+    expect(surface != nullptr, "surface created");
+    viewruntime_surface_resize(surface, 64, 24, 1.f);
+    android_ui_set_surface(ui, surface);
+
+    const char* font_path = "C:\\Windows\\Fonts\\segoeui.ttf";
+    if (std::fopen(font_path, "rb") == nullptr) font_path = "C:\\Windows\\Fonts\\arial.ttf";
+    const status_t font_st = android_ui_set_font(ui, font_path);
+    expect(font_st == OK, "set_font");
+    if (font_st != OK) {
+        android_ui_destroy(ui);
+        viewruntime_surface_destroy(surface);
+        return;
+    }
+
+    /* "A😀B" — the emoji is 4 UTF-8 bytes; UTF-16 needs 2 code units. */
+    android_attr_t attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_STRING, "wrap_content", 0, 0.f, 0, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_STRING, "wrap_content", 0, 0.f, 0, 0}),
+        attr_lit("android:text",
+                 {ANDROID_RAW_TYPE_STRING, "A\xF0\x9F\x98\x80" "B", 0, 0.f, 0, 0}),
+        attr_lit("android:textSize",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 16.f, ANDROID_DIMEN_UNIT_SP, 0}),
+    };
+    android_node_t node{};
+    node.class_name = "TextView";
+    node.parent_index = -1;
+    node.attr_count = 4;
+    node.attrs = attrs;
+    android_view_t root = nullptr;
+    expect_ok(android_ui_inflate(ui, &node, 1, &root), "inflate emoji TextView");
+
+    display_list_t list = nullptr;
+    expect_ok(android_ui_record(ui, root, &list), "record");
+    /* If the converter still loops on the emoji, this call never returns
+     * (the test binary hangs; with the fix it completes). */
+    const status_t rst = android_ui_render(ui, list);
+    expect(rst == OK, "render emoji text completes (no infinite loop)");
+    expect(display_list_get_count(list) > 0, "list recorded commands");
+    display_list_destroy(list);
+    android_ui_destroy(ui);
+    viewruntime_surface_destroy(surface);
+}
+
+/* Regression (audit round 7, LOW): per-corner radii absent from the bag fall
+ * back to the UNIFORM radius (AOSP getDimensionPixelSize(name, radius),
+ * GradientDrawable.java:1668-1675) — the old code left them 0, so
+ * radius=8 + topLeftRadius=4 averaged (4+0+0+0)/4=1px everywhere instead of
+ * (4+8+8+8)/4=7. And a <stroke android:width/> with NO color must resolve to
+ * OPAQUE BLACK (AOSP Paint default, java:754-755 + 2413-2423), not
+ * transparent — verified by rendering: the 2dp black border is visible over
+ * the transparent fill. */
+void test_inflate_per_corner_uniform_default_and_black_stroke() {
+    android_ui_options_t opts{};
+    opts.density = 1.f;
+    opts.scaled_density = 1.f;
+    android_ui_t ui = nullptr;
+    expect_ok(android_ui_create(&opts, &ui), "create ui");
+    android_ui_set_resource_bridge(ui, stub_resolve_resource,
+                                   stub_resolve_style, stub_fetch_file, nullptr);
+    void* surface = viewruntime_surface_create(nullptr);
+    expect(surface != nullptr, "surface created");
+    viewruntime_surface_resize(surface, 40, 40, 1.f);
+    android_ui_set_surface(ui, surface);
+
+    android_attr_t attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 40.f, ANDROID_DIMEN_UNIT_DIP, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 40.f, ANDROID_DIMEN_UNIT_DIP, 0}),
+        attr_lit("android:background",
+                 {ANDROID_RAW_TYPE_REFERENCE, nullptr, 0x7f010007, 0.f, 0, 0}),
+    };
+    android_node_t node{};
+    node.class_name = "FrameLayout";
+    node.parent_index = -1;
+    node.attr_count = 3;
+    node.attrs = attrs;
+    android_view_t root = nullptr;
+    expect_ok(android_ui_inflate(ui, &node, 1, &root), "inflate per-corner bg");
+    expect_ok(android_ui_measure(ui, root, 40.f, 40.f), "measure");
+    expect_ok(android_ui_layout(ui, root, 0.f, 0.f, 40.f, 40.f), "layout");
+
+    display_list_t list = nullptr;
+    expect_ok(android_ui_record(ui, root, &list), "record");
+    expect_ok(android_ui_render(ui, list), "render");
+    display_list_destroy(list);
+    const uint8_t* px = nullptr;
+    int pitch = 0, w = 0, h = 0;
+    viewruntime_surface_pixels(surface, &px, &pitch, &w, &h);
+    auto sample = [&](int x, int y) -> int {
+        const uint8_t* p = px + y * pitch + x * 4;
+        return p[3]; /* alpha */
+    };
+    /* Stroke border (2dp, no declared color → opaque black): painted. The
+     * 2px band spans pixels [0,1] (centerline inset 1px ± 1px); (1,20) is
+     * inside the band, (2,20) is the stroke INTERIOR (transparent). */
+    expect(sample(1, 20) != 0, "stroke border painted (black default)");
+    expect(sample(39, 20) != 0, "right stroke border painted");
+    /* Interior: no <solid> fill → transparent (a stroke-only shape). */
+    expect(sample(20, 20) == 0, "interior transparent (no solid fill)");
+
+    viewruntime_surface_destroy(surface);
+    android_ui_destroy(ui);
+}
+
 } // namespace
 
 int main() {
@@ -1319,6 +1468,8 @@ int main() {
     test_inflate_axml_int_size_constants();
     test_inflate_button_text_centered();
     test_inflate_button_pressed_color_swap();
+    test_inflate_text_with_emoji_completes();
+    test_inflate_per_corner_uniform_default_and_black_stroke();
     if (g_failures != 0) {
         std::fprintf(stderr, "%d FAILURES\n", g_failures);
         return 1;

@@ -84,6 +84,47 @@ struct android_view_s {
      * The render clamps it to min(radius, min(w,h)*0.5) like AOSP
      * (GradientDrawable.java:823-825). */
     float background_corner_radius_dp = 0.f;
+    /* GradientDrawable LINEAR gradient (GradientDrawable.java:1302-1340):
+     * startColor/endColor interpolated along the orientation axis given by
+     * <gradient android:angle> (java:1822-1851). angle 270 = TOP_BOTTOM
+     * (vertical). has_gradient is set when the drawable declares a gradient;
+     * the render then interpolates instead of using a flat color. */
+    bool has_gradient = false;
+    color_rgba gradient_start_color{1.f, 1.f, 1.f, 1.f};
+    /* AOSP default endColor is TRANSPARENT (0): inflate reads
+     * android:endColor with default 0 (GradientDrawable.java:1758-1766,
+     * mGradientColors[1] = valueOf(endColor) where endColor=0 → transparent).
+     * A gradient with only startColor fades start → transparent, never white. */
+    color_rgba gradient_end_color{0.f, 0.f, 0.f, 0.f};
+    /* AOSP default angle when <gradient android:angle> is absent: st.mAngle
+     * defaults to 0 → LEFT_RIGHT (GradientDrawable.java:1808 reads
+     * a.getFloat(angle, st.mAngle) with st.mAngle=0, java:2012; orientation
+     * 0 = LEFT_RIGHT java:1824-1825). The render wraps %360. */
+    int32_t gradient_angle = 0; /* degrees; 0 = LEFT_RIGHT */
+    /* GradientDrawable <stroke android:width android:color> (java:371-417):
+     * an optional border stroked over the same rect as the fill, width px,
+     * optionally dashed (dashWidth/dashGap). has_stroke is set when declared;
+     * dash 0 = solid border. */
+    bool has_stroke = false;
+    float stroke_width_dp = 0.f;
+    color_rgba stroke_color{0.f, 0.f, 0.f, 0.f};
+    float stroke_dash_width_dp = 0.f; /* 0 = no dash (solid) */
+    float stroke_dash_gap_dp = 0.f;
+    /* GradientDrawable shape (java:111-126): RECTANGLE=0, OVAL=1, LINE=2,
+     * RING=3. The <shape android:shape> attr; default RECTANGLE (java:1484). */
+    int32_t gradient_shape = 0; /* ANDROID_SHAPE_RECTANGLE */
+    /* Gradient type (java:136-146): LINEAR=0, RADIAL=1, SWEEP=2. The
+     * <gradient android:type> attr; default LINEAR (java:1800-1806 two colors
+     * = linear). RADIAL needs centerX/Y + gradientRadius; SWEEP is a full
+     * rotation — both rare in the APKs; LINEAR is the common case. */
+    int32_t gradient_type = 0; /* ANDROID_GRADIENT_LINEAR */
+    /* Per-corner radii (java:1668-1685): when the <corners> declares
+     * topLeft/topRight/bottomRight/bottomLeft radii differing from the uniform
+     * radius, AOSP builds a radius array (clockwise, 2 values per corner).
+     * 0 = use the uniform background_corner_radius_dp. */
+    bool has_corner_radii = false;
+    float corner_radius_tl_dp = 0.f, corner_radius_tr_dp = 0.f;
+    float corner_radius_br_dp = 0.f, corner_radius_bl_dp = 0.f;
     /* Interaction visual state, set by the host (android_view_set_pressed /
      * android_view_set_hovered). Only affects background resolution. */
     bool pressed = false;
@@ -225,10 +266,12 @@ android_measured_size_t measure_view(
 void layout_view(android_view_s* view, float x, float y, float w, float h,
                  const android_ui_s* ui);
 /* Defined in android_inflate.cpp: re-resolve a view's background for its
- * current pressed/hovered state (drawable ColorStateList/selector lookup). */
+ * current pressed/hovered state (drawable ColorStateList/selector lookup);
+ * optionally also returns the state-resolved stroke color. */
 bool resolve_background_for_state(const android_ui_s* ui,
                                   const android_view_s* view,
-                                  color_rgba* out);
+                                  color_rgba* out,
+                                  color_rgba* out_stroke_color = nullptr);
 void apply_gravity(int32_t gravity, float child_w, float child_h,
                    float container_w, float container_h,
                    float* out_x, float* out_y);

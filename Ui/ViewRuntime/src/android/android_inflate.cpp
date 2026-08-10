@@ -268,7 +268,23 @@ bool resolve_drawable_solid(const android_ui_s* ui, uint32_t drawable_id,
                             color_rgba* out, bool pressed = false,
                             bool hovered = false,
                             android_view_class_t ctx = ANDROID_VIEW_VIEW,
-                            float* out_corner_radius_dp = nullptr) {
+                            float* out_corner_radius_dp = nullptr,
+                            bool* out_has_gradient = nullptr,
+                            color_rgba* out_gradient_start = nullptr,
+                            color_rgba* out_gradient_end = nullptr,
+                            int32_t* out_gradient_angle = nullptr,
+                            bool* out_has_stroke = nullptr,
+                            float* out_stroke_width_dp = nullptr,
+                            color_rgba* out_stroke_color = nullptr,
+                            float* out_stroke_dash_width_dp = nullptr,
+                            float* out_stroke_dash_gap_dp = nullptr,
+                            int32_t* out_shape = nullptr,
+                            int32_t* out_gradient_type = nullptr,
+                            bool* out_has_corner_radii = nullptr,
+                            float* out_corner_tl = nullptr,
+                            float* out_corner_tr = nullptr,
+                            float* out_corner_br = nullptr,
+                            float* out_corner_bl = nullptr) {
     if (!ui->resolve_style) return false;
     const android_attr_t* attrs = nullptr;
     int32_t count = 0;
@@ -286,6 +302,127 @@ bool resolve_drawable_solid(const android_ui_s* ui, uint32_t drawable_id,
                 *out_corner_radius_dp = dim_to_dp(ui, attrs[i].value);
                 break;
             }
+        }
+    }
+    /* GradientDrawable LINEAR gradient: <gradient android:startColor
+     * android:endColor android:angle>. AOSP inflate: colors[0]=start,
+     * colors[1]=end (GradientDrawable.java:1800-1806), angle→orientation
+     * (java:1808-1851). NOTE: the bridge bag currently exposes ONLY startColor
+     * (AndroidResourceQueryService Walk) — endColor/angle are parsed here
+     * when App Runtime extends the bag to emit them. Without them the render
+     * uses gradient_end_color default (transparent) and gradient_angle default
+     * (0/LEFT_RIGHT). */
+    if (out_has_gradient) {
+        bool found_start = false;
+        for (int32_t i = 0; i < count; ++i) {
+            const char* n = attr_short(attrs[i].name);
+            if (std::strcmp(n, "startColor") == 0) {
+                if (out_gradient_start &&
+                    resolve_color(ui, attrs[i].value, out_gradient_start, ctx))
+                    found_start = true;
+            } else if (std::strcmp(n, "endColor") == 0) {
+                if (out_gradient_end)
+                    resolve_color(ui, attrs[i].value, out_gradient_end, ctx);
+            } else if (std::strcmp(n, "angle") == 0 &&
+                       attrs[i].value.kind == ANDROID_RAW_TYPE_FLOAT) {
+                if (out_gradient_angle)
+                    *out_gradient_angle = static_cast<int32_t>(attrs[i].value.float_value);
+            } else if (std::strcmp(n, "angle") == 0 &&
+                       attrs[i].value.kind == ANDROID_RAW_TYPE_INT_DEC) {
+                if (out_gradient_angle)
+                    *out_gradient_angle = attrs[i].value.int_value;
+            }
+        }
+        /* A gradient is present ONLY when the drawable actually declares a
+         * <gradient> (startColor exists) — a selector/solid bag must not be
+         * mistaken for one (that would force the gradient paint path and
+         * break pressed-color swaps). */
+        *out_has_gradient = found_start;
+    }
+    /* GradientDrawable <stroke>: <shape><stroke android:width android:color
+     * android:dashWidth android:dashGap/></shape> (java:371-417). NOTE: the
+     * bridge bag currently exposes ONLY color/startColor/radius/state_* — the
+     * stroke attrs are parsed here when App Runtime extends the bag to emit
+     * them (the attr names follow the runtime's bag contract: strokeWidth/
+     * strokeColor/dashWidth/dashGap). */
+    if (out_has_stroke) {
+        bool found_stroke = false;
+        bool found_color = false;
+        for (int32_t i = 0; i < count; ++i) {
+            const char* n = attr_short(attrs[i].name);
+            if (std::strcmp(n, "strokeWidth") == 0) {
+                if (out_stroke_width_dp) *out_stroke_width_dp = dim_to_dp(ui, attrs[i].value);
+                found_stroke = true;
+            } else if (std::strcmp(n, "strokeColor") == 0) {
+                if (out_stroke_color &&
+                    resolve_color(ui, attrs[i].value, out_stroke_color, ctx)) {
+                    found_stroke = true;
+                    found_color = true;
+                }
+            } else if (std::strcmp(n, "dashWidth") == 0) {
+                if (out_stroke_dash_width_dp)
+                    *out_stroke_dash_width_dp = dim_to_dp(ui, attrs[i].value);
+            } else if (std::strcmp(n, "dashGap") == 0) {
+                if (out_stroke_dash_gap_dp)
+                    *out_stroke_dash_gap_dp = dim_to_dp(ui, attrs[i].value);
+            }
+        }
+        /* AOSP: the stroke Paint defaults to BLACK when no color is declared —
+         * setColor is only called when mStrokeColors != null, and draw() paints
+         * whenever width > 0 (GradientDrawable.java:754-755, 2413-2423). The
+         * runtime's transparent default would make `<stroke android:width/>`
+         * invisible; match AOSP with opaque black. */
+        if (found_stroke && !found_color && out_stroke_color) {
+            *out_stroke_color = {0.f, 0.f, 0.f, 1.f}; /* opaque black (r,g,b,a) */
+        }
+        *out_has_stroke = found_stroke;
+    }
+    /* GradientDrawable shape + gradient type + per-corner radii: <shape
+     * android:shape> (java:1484), <gradient android:type> (java:1751-1752),
+     * <corners topLeftRadius topRightRadius bottomRightRadius
+     * bottomLeftRadius> (java:1668-1685). NOTE: the bridge bag currently
+     * exposes ONLY radius from <corners> — shape/type/per-corner radii are
+     * parsed here when App Runtime extends the bag. */
+    if (out_shape) {
+        /* AOSP reads each per-corner as getDimensionPixelSize(name, radius)
+         * — the UNIFORM radius is the default when the corner attr is absent
+         * (GradientDrawable.java:1668-1675). The old code left absent corners
+         * at 0, so `<corners android:radius="8dp" android:topLeftRadius="4dp"/>`
+         * produced tl=4 + three 0s (avg 1px everywhere) instead of tl=4 +
+         * three 8s. Initialize to the uniform radius, then override with the
+         * explicitly declared corners. */
+        const float uniform = out_corner_radius_dp ? *out_corner_radius_dp : 0.f;
+        if (out_corner_tl) *out_corner_tl = uniform;
+        if (out_corner_tr) *out_corner_tr = uniform;
+        if (out_corner_br) *out_corner_br = uniform;
+        if (out_corner_bl) *out_corner_bl = uniform;
+        for (int32_t i = 0; i < count; ++i) {
+            const char* n = attr_short(attrs[i].name);
+            if (std::strcmp(n, "shape") == 0 &&
+                attrs[i].value.kind == ANDROID_RAW_TYPE_INT_DEC) {
+                *out_shape = attrs[i].value.int_value;
+            } else if (std::strcmp(n, "type") == 0 &&
+                       attrs[i].value.kind == ANDROID_RAW_TYPE_INT_DEC) {
+                if (out_gradient_type) *out_gradient_type = attrs[i].value.int_value;
+            } else if (std::strcmp(n, "topLeftRadius") == 0) {
+                if (out_corner_tl) *out_corner_tl = dim_to_dp(ui, attrs[i].value);
+            } else if (std::strcmp(n, "topRightRadius") == 0) {
+                if (out_corner_tr) *out_corner_tr = dim_to_dp(ui, attrs[i].value);
+            } else if (std::strcmp(n, "bottomRightRadius") == 0) {
+                if (out_corner_br) *out_corner_br = dim_to_dp(ui, attrs[i].value);
+            } else if (std::strcmp(n, "bottomLeftRadius") == 0) {
+                if (out_corner_bl) *out_corner_bl = dim_to_dp(ui, attrs[i].value);
+            }
+        }
+        if (out_has_corner_radii) {
+            /* AOSP builds the array only when the per-corner values differ
+             * from the uniform radius (java:1676-1685); otherwise the uniform
+             * background_corner_radius_dp applies. After the uniform-default
+             * initialization, "any corner != uniform" is the exact gate. */
+            *out_has_corner_radii =
+                out_corner_tl && out_corner_tr && out_corner_br && out_corner_bl &&
+                (*out_corner_tl != uniform || *out_corner_tr != uniform ||
+                 *out_corner_br != uniform || *out_corner_bl != uniform);
         }
     }
     const char* want = nullptr;
@@ -649,20 +786,50 @@ bool apply_attr(android_ui_s* ui, android_view_s* view,
     }
     if (std::strcmp(name, "background") == 0) {
         color_rgba c{};
-        if (resolve_background(ui, v, &c)) {
+        const bool color_ok = resolve_background(ui, v, &c);
+        if (v.kind == ANDROID_RAW_TYPE_REFERENCE) {
+            /* Resolve the drawable metadata (corners/stroke/gradient/shape)
+             * EVEN when the bag has no <solid> color — a stroke-only or
+             * gradient-only shape is still a valid background (AOSP: the
+             * Drawable itself is the background). The old gate (color_ok
+             * first) silently dropped stroke-only backgrounds. */
+            resolve_drawable_solid(ui, v.ref_id, &c, false, false,
+                                   view->cls,
+                                   &view->background_corner_radius_dp,
+                                   &view->has_gradient,
+                                   &view->gradient_start_color,
+                                   &view->gradient_end_color,
+                                   &view->gradient_angle,
+                                   &view->has_stroke,
+                                   &view->stroke_width_dp,
+                                   &view->stroke_color,
+                                   &view->stroke_dash_width_dp,
+                                   &view->stroke_dash_gap_dp,
+                                   &view->gradient_shape,
+                                   &view->gradient_type,
+                                   &view->has_corner_radii,
+                                   &view->corner_radius_tl_dp,
+                                   &view->corner_radius_tr_dp,
+                                   &view->corner_radius_br_dp,
+                                   &view->corner_radius_bl_dp);
+            if (color_ok) {
+                view->background_color = c;
+            } else {
+                /* No <solid> fill: the shape paints only its stroke/gradient.
+                 * Force TRANSPARENT — the struct default is opaque white and
+                 * would paint an unwanted white fill under the border. */
+                view->background_color = {0.f, 0.f, 0.f, 0.f};
+            }
+            view->background_drawable_id = v.ref_id;
+            /* The background is present when it has a fill color, a gradient
+             * OR a stroke — any of them paints something. */
+            view->has_background =
+                color_ok || view->has_gradient || view->has_stroke;
+            return true;
+        }
+        if (color_ok) {
             view->background_color = c;
             view->has_background = true;
-            /* Remember the source drawable (when it IS a drawable reference)
-             * so the render pass can re-resolve per interaction state. */
-            if (v.kind == ANDROID_RAW_TYPE_REFERENCE) {
-                view->background_drawable_id = v.ref_id;
-                /* Rounded-corner radius from the drawable's <corners
-                 * android:radius> (GradientDrawable.setCornerRadius,
-                 * GradientDrawable.java:302). */
-                resolve_drawable_solid(ui, v.ref_id, &c, false, false,
-                                       view->cls,
-                                       &view->background_corner_radius_dp);
-            }
             return true;
         }
         /* A non-solid drawable (gradient/selector with states, etc.) is not
@@ -836,7 +1003,8 @@ namespace viewruntime::android {
  * display-list recorder), so it lives outside the anonymous namespace. */
 bool resolve_background_for_state(const android_ui_s* ui,
                                   const android_view_s* view,
-                                  color_rgba* out) {
+                                  color_rgba* out,
+                                  color_rgba* out_stroke_color) {
     if (!view->has_background) return false;
     if (view->background_drawable_id == 0) {
         *out = view->background_color;
@@ -844,9 +1012,29 @@ bool resolve_background_for_state(const android_ui_s* ui,
     }
     /* resolve_drawable_solid (anonymous) is still reachable from here: the
      * anonymous namespace is nested inside viewruntime::android, so an
-     * unqualified call in this TU resolves to it. */
+     * unqualified call in this TU resolves to it. Re-resolve the state
+     * (pressed/hovered) for BOTH the fill color and the stroke color — AOSP
+     * onStateChange re-resolves mStrokeColors too (GradientDrawable.java:
+     * 1144-1155). */
+    color_rgba state_stroke{0.f, 0.f, 0.f, 0.f};
+    bool state_has_stroke = false;
     if (resolve_drawable_solid(ui, view->background_drawable_id, out,
-                               view->pressed, view->hovered)) {
+                               view->pressed, view->hovered,
+                               ANDROID_VIEW_VIEW,
+                               nullptr,           /* corner_radius */
+                               nullptr, nullptr, nullptr, nullptr, /* gradient */
+                               &state_has_stroke, /* has_stroke */
+                               nullptr,           /* stroke_width */
+                               out_stroke_color ? &state_stroke : nullptr,
+                               nullptr, nullptr,  /* dash */
+                               nullptr, nullptr,  /* shape, type */
+                               nullptr, nullptr, nullptr, nullptr, nullptr)) {
+        /* Only overwrite the caller's stroke color when the drawable actually
+         * declared a stroke (state_has_stroke) — otherwise leave the
+         * stateless stroke untouched (a plain solid/selector must not clobber
+         * it with transparent). */
+        if (out_stroke_color && state_has_stroke)
+            *out_stroke_color = state_stroke;
         return true;
     }
     return false;
