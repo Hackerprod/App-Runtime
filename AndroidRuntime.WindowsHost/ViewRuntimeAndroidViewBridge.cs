@@ -245,6 +245,18 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
         throw NotWired();
     }
 
+    public void SetPressed(DexObject view, bool pressed)
+    {
+        RequireAvailable();
+        ViewRuntimeBridgeNative.android_view_set_pressed(NativeOf(view), (byte)(pressed ? 1 : 0));
+    }
+
+    public void SetHovered(DexObject view, bool hovered)
+    {
+        RequireAvailable();
+        ViewRuntimeBridgeNative.android_view_set_hovered(NativeOf(view), (byte)(hovered ? 1 : 0));
+    }
+
     public void SetVisibility(DexObject view, int visibility)
     {
         RequireAvailable();

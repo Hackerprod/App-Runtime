@@ -1,4 +1,4 @@
-#include "android_types.h"
+﻿#include "android_types.h"
 #include "../rendering/display_list_types.h"
 #include "../include/viewruntime/viewruntime_backend.h"
 
@@ -86,9 +86,18 @@ void emit_translate(display_list_s* list, float dx, float dy, bool push) {
 
 corner_radii zero_radii() { return {}; }
 
-void paint_background(const android_view_s* view, display_list_s* list) {
+void paint_background(const android_view_s* view, display_list_s* list,
+                      const android_ui_s* ui) {
     if (!view->has_background) return;
-    emit_fill_rounded_rect(list, view->bounds, zero_radii(), view->background_color);
+    color_rgba c = view->background_color;
+    /* Drawable-backed backgrounds re-resolve for the current interaction
+     * state (pressed/hovered) â€” the stateless default otherwise. */
+    if (view->background_drawable_id != 0 &&
+        (view->pressed || view->hovered)) {
+        color_rgba state_c{};
+        if (resolve_background_for_state(ui, view, &state_c)) c = state_c;
+    }
+    emit_fill_rounded_rect(list, view->bounds, zero_radii(), c);
 }
 
 /* Computes the text cell (bounds minus padding) and vertical placement. */
@@ -100,7 +109,7 @@ rectf text_rect(const android_view_s* view, const android_ui_s* ui,
                                std::max(0.f, view->bounds.width - l - r),
                                std::max(0.f, view->bounds.height - t - b)};
     const int32_t g = gravity_normalize_ltr(view->text_gravity);
-    /* Mask + equality, exactly like AOSP Gravity.apply — never bitwise `&`
+    /* Mask + equality, exactly like AOSP Gravity.apply â€” never bitwise `&`
      * on the raw value: CENTER (0x11) shares the 0x01 bit with RIGHT (0x05),
      * so `g & RIGHT` is true for CENTER and misaligns the text to the right
      * (the same class of bug fixed in apply_gravity). */
@@ -119,7 +128,7 @@ rectf text_rect(const android_view_s* view, const android_ui_s* ui,
 
 void paint_text_view(const android_view_s* view, display_list_s* list,
                      const android_ui_s* ui) {
-    paint_background(view, list);
+    paint_background(view, list, ui);
     const char* text = display_text(view);
     if (!text || !*text) return;
     const float size_px = sp(ui, view->text_size_sp);
@@ -133,7 +142,7 @@ void paint_text_view(const android_view_s* view, display_list_s* list,
 
 void paint_checkable(const android_view_s* view, display_list_s* list,
                      const android_ui_s* ui) {
-    paint_background(view, list);
+    paint_background(view, list, ui);
     const bool radio = view->cls == ANDROID_VIEW_RADIO_BUTTON;
     const float size = dp(ui, 16.f);
     const float gap = dp(ui, 8.f);
@@ -170,7 +179,7 @@ void paint_checkable(const android_view_s* view, display_list_s* list,
 
 void paint_image(const android_view_s* view, display_list_s* list,
                  const android_ui_s* ui) {
-    paint_background(view, list);
+    paint_background(view, list, ui);
     if (view->image_source.empty() || !view->image_has_geometry) return;
     /* The geometry (AOSP configureBounds) is content-relative; offset it into
      * the view box (bounds + padding). */
@@ -190,7 +199,7 @@ void paint_image(const android_view_s* view, display_list_s* list,
 
 void paint_progress(const android_view_s* view, display_list_s* list,
                     const android_ui_s* ui) {
-    paint_background(view, list);
+    paint_background(view, list, ui);
     const float l = dp(ui, view->padding_left_dp), t = dp(ui, view->padding_top_dp);
     const float r = dp(ui, view->padding_right_dp), b = dp(ui, view->padding_bottom_dp);
     const rectf track = {view->bounds.x + l, view->bounds.y + t,
@@ -216,7 +225,7 @@ void record_children(const android_view_s* view, display_list_s* list,
 /* ListView / RecyclerView: clip to the viewport, record children (already in
  * screen space), then draw the ListView dividers per AOSP dispatchDraw. */
 void record_list(const android_view_s* view, display_list_s* list, const android_ui_s* ui) {
-    paint_background(view, list);
+    paint_background(view, list, ui);
     emit_clip(list, view->bounds, true);
     const bool is_list = view->cls == ANDROID_VIEW_LIST_VIEW;
     const bool vertical = is_list || view->orientation == ANDROID_VERTICAL;
@@ -269,10 +278,10 @@ void record_view(const android_view_s* view, display_list_s* list,
             paint_progress(view, list, ui);
             return;
         case ANDROID_VIEW_SCROLL_VIEW:
-            paint_background(view, list);
+            paint_background(view, list, ui);
             emit_clip(list, view->bounds, true);
             /* Children are laid out in screen space (bounds already include the
-             * clamped scroll), so only clipping is needed — never translate. */
+             * clamped scroll), so only clipping is needed â€” never translate. */
             record_children(view, list, ui);
             emit_clip(list, view->bounds, false);
             return;
@@ -282,13 +291,13 @@ void record_view(const android_view_s* view, display_list_s* list,
             return;
         case ANDROID_VIEW_GRID_LAYOUT:
         case ANDROID_VIEW_RELATIVE_LAYOUT:
-            paint_background(view, list);
+            paint_background(view, list, ui);
             record_children(view, list, ui);
             return;
         default:
             break;
     }
-    paint_background(view, list);
+    paint_background(view, list, ui);
     record_children(view, list, ui);
 }
 
@@ -308,7 +317,7 @@ API status_t android_ui_record(
 }
 
 /* Execute a recorded display list onto the session's registered render
- * surface. This is the ONLY path that turns recorded commands into pixels —
+ * surface. This is the ONLY path that turns recorded commands into pixels â€”
  * the host never interprets commands itself (Phase 2 ownership). Commands
  * without a backend mapping are skipped, never approximated. */
 API status_t android_ui_render(

@@ -14,14 +14,16 @@ namespace AndroidRuntime.WindowsHost;
 internal sealed partial class AndroidHwndRenderSurface : HwndHost
 {
     private const int WsChild = 0x40000000, WsVisible = 0x10000000, WsTabStop = 0x00010000;
-    private const int WmPaint = 0x000F, WmEraseBackground = 0x0014, WmLButtonDown = 0x0201, WmLButtonUp = 0x0202, WmKeyDown = 0x0100;
+    private const int WmPaint = 0x000F, WmEraseBackground = 0x0014, WmLButtonDown = 0x0201, WmLButtonUp = 0x0202, WmKeyDown = 0x0100, WmMouseMove = 0x0200, WmMouseLeave = 0x02A3;
     private const int VkReturn = 0x0D, VkSpace = 0x20;
+    private const uint TmeLeave = 0x00000002;
     private readonly WindowsRetainedRenderer _renderer = new();
     private readonly RetainedFrameScheduler _scheduler;
     private AndroidHostedActivitySession? _session;
     private nint _hwnd;
     private int? _pressedId;
     private int? _focusedId;
+    private int? _hoveredId;
     private long _revision;
     private int _frameInFlight, _frameAgain, _disposed;
 
@@ -75,13 +77,38 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
                 Native.SetFocus(hwnd); Native.SetCapture(hwnd);
                 _pressedId = _session?.ViewBridge.HitTest(SignedLow(lParam), SignedHigh(lParam));
                 _focusedId = _pressedId;
+                if (_pressedId is int downPressedId) { SetPressed(downPressedId, true); RequestFrame(); }
                 handled = true; return 0;
             case WmLButtonUp:
                 if (!InputEnabled) break;
                 Native.ReleaseCapture();
                 int? released = _session?.ViewBridge.HitTest(SignedLow(lParam), SignedHigh(lParam));
-                int? invoke = released == _pressedId ? released : null; _pressedId = null;
+                int? invoke = released == _pressedId ? released : null;
+                // Clear the press on the id that was pressed at DOWN, wherever
+                // the pointer is released (real Android cancels the press when
+                // released outside the view).
+                if (_pressedId is int upPressedId) { SetPressed(upPressedId, false); RequestFrame(); }
+                _pressedId = null;
                 if (invoke is int id) EnqueueClick(id);
+                handled = true; return 0;
+            case WmMouseMove:
+                if (!InputEnabled) break;
+                // Arm leave-tracking so Windows posts WM_MOUSELEAVE when the
+                // pointer leaves the surface (standard TrackMouseEvent pattern;
+                // re-arming on every move is safe and resets the leave timer).
+                var trackMouse = new TrackMouseEventStruct { Size = (uint)Marshal.SizeOf<TrackMouseEventStruct>(), Flags = TmeLeave, Hwnd = hwnd };
+                Native.TrackMouseEvent(ref trackMouse);
+                int? hovered = _session?.ViewBridge.HitTest(SignedLow(lParam), SignedHigh(lParam));
+                if (hovered != _hoveredId)
+                {
+                    if (_hoveredId is int oldId) SetHovered(oldId, false);
+                    _hoveredId = hovered;
+                    if (hovered is int newId) SetHovered(newId, true);
+                    RequestFrame();
+                }
+                handled = true; return 0;
+            case WmMouseLeave:
+                if (_hoveredId is int leaveId) { SetHovered(leaveId, false); _hoveredId = null; RequestFrame(); }
                 handled = true; return 0;
             case WmKeyDown when InputEnabled && (wParam == VkReturn || wParam == VkSpace):
                 if (_focusedId is int focused) EnqueueClick(focused);
@@ -106,6 +133,22 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) when (!InputEnabled) { }
         });
+    }
+
+    private void SetPressed(int id, bool pressed)
+    {
+        AndroidHostedActivitySession? session = _session;
+        if (session is null) return;
+        DexObject? view = session.ViewBridge.FindViewById(id);
+        if (view is not null) session.ViewBridge.SetPressed(view, pressed);
+    }
+
+    private void SetHovered(int id, bool hovered)
+    {
+        AndroidHostedActivitySession? session = _session;
+        if (session is null) return;
+        DexObject? view = session.ViewBridge.FindViewById(id);
+        if (view is not null) session.ViewBridge.SetHovered(view, hovered);
     }
 
     internal void RequestFrame()
@@ -151,6 +194,13 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
 
     [StructLayout(LayoutKind.Sequential)] private unsafe struct PaintStruct { internal nint Hdc; internal int Erase; internal Rect Rect; internal int Restore; internal int IncUpdate; internal fixed byte Reserved[32]; }
     [StructLayout(LayoutKind.Sequential)] private struct Rect { internal int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] private struct TrackMouseEventStruct
+    {
+        internal uint Size;
+        internal uint Flags;
+        internal nint Hwnd;
+        internal uint HoverTime;
+    }
     private static partial class Native
     {
         [LibraryImport("user32.dll", EntryPoint = "CreateWindowExW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)] internal static partial nint CreateWindowEx(int exStyle, string className, string windowName, int style, int x, int y, int width, int height, nint parent, nint menu, nint instance, nint parameter);
@@ -161,5 +211,6 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
         [LibraryImport("user32.dll")] internal static partial nint SetFocus(nint hwnd);
         [LibraryImport("user32.dll")] internal static partial nint SetCapture(nint hwnd);
         [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool ReleaseCapture();
+        [LibraryImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool TrackMouseEvent(ref TrackMouseEventStruct tme);
     }
 }

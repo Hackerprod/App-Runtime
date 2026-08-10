@@ -75,6 +75,14 @@ struct android_view_s {
 
     color_rgba background_color{1.f, 1.f, 1.f, 1.f};
     bool has_background = false;
+    /* Drawable resource id the background came from (0 = flat color set
+     * directly). When non-zero, the render pass re-resolves the color from
+     * the drawable's ColorStateList/selector honoring pressed/hovered. */
+    uint32_t background_drawable_id = 0;
+    /* Interaction visual state, set by the host (android_view_set_pressed /
+     * android_view_set_hovered). Only affects background resolution. */
+    bool pressed = false;
+    bool hovered = false;
 
     /* Style/theme: raw style id the view was inflated with (0 = none); the
      * parent chain is walked through the resource bridge at resolution time,
@@ -211,6 +219,11 @@ android_measured_size_t measure_view(
     android_measure_spec_t spec_h, const android_ui_s* ui);
 void layout_view(android_view_s* view, float x, float y, float w, float h,
                  const android_ui_s* ui);
+/* Defined in android_inflate.cpp: re-resolve a view's background for its
+ * current pressed/hovered state (drawable ColorStateList/selector lookup). */
+bool resolve_background_for_state(const android_ui_s* ui,
+                                  const android_view_s* view,
+                                  color_rgba* out);
 void apply_gravity(int32_t gravity, float child_w, float child_h,
                    float container_w, float container_h,
                    float* out_x, float* out_y);

@@ -114,6 +114,26 @@ const android_attr_t kSelectorBagAttrs[1] = {
      {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF03DAC5)}},
 };
 
+/* Selector with interaction states, exposed per the hover/pressed ABI
+ * contract: the stateless <item> is "color", the pressed <item> is
+ * "state_pressed". Default teal (#FF03DAC5), pressed dark (#FF008577). */
+const android_attr_t kStatefulSelectorAttrs[2] = {
+    {"android:color", 0x01010098,
+     {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF03DAC5)}},
+    {"state_pressed", 0x010100fe,
+     {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF008577)}},
+};
+
+/* GradientDrawable page background: <shape><gradient startColor endColor
+ * angle/></shape> — no <solid>. The bag exposes startColor (the dominant
+ * gradient color for angle=270). */
+const android_attr_t kGradientBgAttrs[2] = {
+    {"startColor", 0x010101cd,
+     {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF0B1020)}},
+    {"endColor", 0x010101ce,
+     {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF111A33)}},
+};
+
 /* Theme with windowBackground: style 0x7f020011 -> windowBackground =
  * @drawable/0x7f020020 (solid green via drawable bag). */
 const android_attr_t kWindowThemeAttrs[1] = {
@@ -151,6 +171,12 @@ bool_t stub_resolve_style(uint32_t id, const android_attr_t** out,
             return true;
         case 0x7f010004:
             *out = kSelectorBagAttrs; *count = 1; *parent = 0;
+            return true;
+        case 0x7f010005:
+            *out = kStatefulSelectorAttrs; *count = 2; *parent = 0;
+            return true;
+        case 0x7f010006:
+            *out = kGradientBgAttrs; *count = 2; *parent = 0;
             return true;
         default:
             *out = nullptr; *count = 0; *parent = 0;
@@ -931,6 +957,229 @@ void test_inflate_button_text_centered() {
     android_ui_destroy(ui);
 }
 
+/* Hover/pressed visual feedback: a Button whose background is a stateful
+ * selector (default teal #FF03DAC5, pressed dark #FF008577) renders the
+ * DEFAULT color normally and SWAPS to the pressed color when
+ * android_view_set_pressed(true) is called — verified on real pixels. */
+void test_inflate_button_pressed_color_swap() {
+    android_ui_options_t opts{};
+    opts.density = 1.f;
+    opts.scaled_density = 1.f;
+    android_ui_t ui = nullptr;
+    expect_ok(android_ui_create(&opts, &ui), "create ui");
+    android_ui_set_resource_bridge(ui, stub_resolve_resource,
+                                   stub_resolve_style, stub_fetch_file, nullptr);
+
+    static const char* font_candidates[] = {
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    };
+    const char* font_path = nullptr;
+    for (const char* c : font_candidates) {
+        FILE* f = std::fopen(c, "rb");
+        if (f) { std::fclose(f); font_path = c; break; }
+    }
+    if (font_path) expect_ok(android_ui_set_font(ui, font_path), "set font");
+
+    void* surface = viewruntime_surface_create(font_path);
+    expect(surface != nullptr, "surface created");
+    viewruntime_surface_resize(surface, 120, 60, 1.f);
+    android_ui_set_surface(ui, surface);
+
+    /* Button 100x40 with background=@drawable/0x7f010005 (stateful selector). */
+    android_attr_t attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 100.f, ANDROID_DIMEN_UNIT_DIP, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 40.f, ANDROID_DIMEN_UNIT_DIP, 0}),
+        attr_lit("android:background",
+                 {ANDROID_RAW_TYPE_REFERENCE, nullptr, 0x7f010005, 0.f, 0, 0}),
+        attr_lit("android:text", {ANDROID_RAW_TYPE_STRING, "OK", 0, 0.f, 0, 0}),
+        attr_lit("android:textSize",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 14.f, ANDROID_DIMEN_UNIT_SP, 0}),
+        attr_lit("android:textColor", {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF000000)}),
+    };
+    android_node_t node{};
+    node.class_name = "Button";
+    node.parent_index = -1;
+    node.attr_count = 6;
+    node.attrs = attrs;
+
+    android_view_t root = nullptr;
+    expect_ok(android_ui_inflate(ui, &node, 1, &root), "inflate");
+    expect_ok(android_ui_measure(ui, root, 120.f, 60.f), "measure");
+    expect_ok(android_ui_layout(ui, root, 10.f, 10.f, 100.f, 40.f), "layout");
+
+    /* Background sample point: inside the button but away from the text —
+     * the button spans (10,10)-(110,50); sample (15,45) (bottom-left corner
+     * area, no glyphs). BGRA byte order. */
+    struct Rgb { int r, g, b; };
+    auto sample_bg = [&]() -> Rgb {
+        const uint8_t* px = nullptr;
+        int pitch = 0, w = 0, h = 0;
+        viewruntime_surface_pixels(surface, &px, &pitch, &w, &h);
+        const uint8_t* p = px + 45 * pitch + 15 * 4;
+        return {static_cast<int>(p[2]), static_cast<int>(p[1]),
+                static_cast<int>(p[0])}; /* r,g,b */
+    };
+
+    /* Default state: teal #FF03DAC5 -> r=3 g=218 b=197. */
+    display_list_t list = nullptr;
+    expect_ok(android_ui_record(ui, root, &list), "record default");
+    expect_ok(android_ui_render(ui, list), "render default");
+    display_list_destroy(list);
+    Rgb r0 = sample_bg();
+    expect(r0.r < 32 && r0.g > 180 && r0.b > 160,
+           "default background is teal (#03DAC5)");
+
+    /* Pressed: dark #FF008577 -> r=0 g=133 b=119. */
+    expect_ok(android_view_set_pressed(root, TRUE), "set pressed");
+    list = nullptr;
+    expect_ok(android_ui_record(ui, root, &list), "record pressed");
+    expect_ok(android_ui_render(ui, list), "render pressed");
+    display_list_destroy(list);
+    Rgb r1 = sample_bg();
+    expect(r1.r < 32 && r1.g > 100 && r1.g < 160 && r1.b > 90 && r1.b < 150,
+           "pressed background is dark (#008577)");
+    expect(!(r0.r == r1.r && r0.g == r1.g && r0.b == r1.b),
+           "pressed color differs from default");
+
+    /* Release: back to teal. */
+    expect_ok(android_view_set_pressed(root, FALSE), "release pressed");
+    list = nullptr;
+    expect_ok(android_ui_record(ui, root, &list), "record released");
+    expect_ok(android_ui_render(ui, list), "render released");
+    display_list_destroy(list);
+    Rgb r2 = sample_bg();
+    expect(r2.r < 32 && r2.g > 180 && r2.b > 160,
+           "released background is teal again");
+
+    /* Honest fallback: a drawable with NO state_pressed item must keep the
+     * stateless color when pressed — never a fabricated color. Build a fresh
+     * session with the stateless-only selector (0x7f010004). */
+    android_ui_destroy(ui);
+    viewruntime_surface_destroy(surface);
+
+    /* Fresh session: button with background=@drawable/0x7f010004 (no states). */
+    android_ui_t ui2 = nullptr;
+    expect_ok(android_ui_create(&opts, &ui2), "create ui2");
+    android_ui_set_resource_bridge(ui2, stub_resolve_resource,
+                                   stub_resolve_style, stub_fetch_file, nullptr);
+    if (font_path) expect_ok(android_ui_set_font(ui2, font_path), "set font ui2");
+    void* surface2 = viewruntime_surface_create(font_path);
+    expect(surface2 != nullptr, "surface2 created");
+    viewruntime_surface_resize(surface2, 120, 60, 1.f);
+    android_ui_set_surface(ui2, surface2);
+
+    android_attr_t attrs2[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 100.f, ANDROID_DIMEN_UNIT_DIP, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 40.f, ANDROID_DIMEN_UNIT_DIP, 0}),
+        attr_lit("android:background",
+                 {ANDROID_RAW_TYPE_REFERENCE, nullptr, 0x7f010004, 0.f, 0, 0}),
+        attr_lit("android:text", {ANDROID_RAW_TYPE_STRING, "OK", 0, 0.f, 0, 0}),
+        attr_lit("android:textSize",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 14.f, ANDROID_DIMEN_UNIT_SP, 0}),
+    };
+    android_node_t node2{};
+    node2.class_name = "Button";
+    node2.parent_index = -1;
+    node2.attr_count = 5;
+    node2.attrs = attrs2;
+
+    android_view_t root2 = nullptr;
+    expect_ok(android_ui_inflate(ui2, &node2, 1, &root2), "inflate fallback");
+    expect_ok(android_ui_measure(ui2, root2, 120.f, 60.f), "measure fallback");
+    expect_ok(android_ui_layout(ui2, root2, 10.f, 10.f, 100.f, 40.f), "layout fallback");
+
+    auto sample2 = [&]() -> Rgb {
+        const uint8_t* px = nullptr;
+        int pitch = 0, w = 0, h = 0;
+        viewruntime_surface_pixels(surface2, &px, &pitch, &w, &h);
+        const uint8_t* p = px + 45 * pitch + 15 * 4;
+        return {static_cast<int>(p[2]), static_cast<int>(p[1]),
+                static_cast<int>(p[0])};
+    };
+
+    /* Default: teal. */
+    display_list_t list2 = nullptr;
+    expect_ok(android_ui_record(ui2, root2, &list2), "record fallback default");
+    expect_ok(android_ui_render(ui2, list2), "render fallback default");
+    display_list_destroy(list2);
+    Rgb fd = sample2();
+    expect(fd.r < 32 && fd.g > 180 && fd.b > 160,
+           "fallback default is teal");
+
+    /* Pressed with NO state_pressed item: must STAY teal (honest fallback). */
+    expect_ok(android_view_set_pressed(root2, TRUE), "press fallback");
+    list2 = nullptr;
+    expect_ok(android_ui_record(ui2, root2, &list2), "record fallback pressed");
+    expect_ok(android_ui_render(ui2, list2), "render fallback pressed");
+    display_list_destroy(list2);
+    Rgb fp = sample2();
+    expect(fp.r < 32 && fp.g > 180 && fp.b > 160,
+           "fallback pressed stays teal (no fabricated color)");
+
+    viewruntime_surface_destroy(surface2);
+    android_ui_destroy(ui2);
+
+    /* GradientDrawable page background: <shape><gradient startColor
+     * #FF0B1020 endColor #FF111A33/></shape> — no <solid>. The background
+     * must resolve to the gradient's startColor (page navy), never black.
+     * RuntimeApiLab bg_page regression. */
+    android_ui_t ui3 = nullptr;
+    expect_ok(android_ui_create(&opts, &ui3), "create ui3");
+    android_ui_set_resource_bridge(ui3, stub_resolve_resource,
+                                   stub_resolve_style, stub_fetch_file, nullptr);
+    void* surface3 = viewruntime_surface_create(nullptr);
+    expect(surface3 != nullptr, "surface3 created");
+    viewruntime_surface_resize(surface3, 40, 40, 1.f);
+    android_ui_set_surface(ui3, surface3);
+
+    android_attr_t attrs3[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 40.f, ANDROID_DIMEN_UNIT_DIP, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 40.f, ANDROID_DIMEN_UNIT_DIP, 0}),
+        attr_lit("android:background",
+                 {ANDROID_RAW_TYPE_REFERENCE, nullptr, 0x7f010006, 0.f, 0, 0}),
+    };
+    android_node_t node3{};
+    node3.class_name = "FrameLayout";
+    node3.parent_index = -1;
+    node3.attr_count = 3;
+    node3.attrs = attrs3;
+
+    android_view_t root3 = nullptr;
+    expect_ok(android_ui_inflate(ui3, &node3, 1, &root3), "inflate gradient bg");
+    expect_ok(android_ui_measure(ui3, root3, 40.f, 40.f), "measure gradient bg");
+    expect_ok(android_ui_layout(ui3, root3, 0.f, 0.f, 40.f, 40.f), "layout gradient bg");
+
+    color_rgba gbg{};
+    android_view_get_background_color(root3, &gbg);
+    expect(gbg.a == 1.f && gbg.r < 0.1f && gbg.g > 0.04f && gbg.g < 0.09f &&
+           gbg.b > 0.1f && gbg.b < 0.16f,
+           "gradient background resolves to startColor navy (#0B1020), not black");
+
+    display_list_t list3 = nullptr;
+    expect_ok(android_ui_record(ui3, root3, &list3), "record gradient bg");
+    expect_ok(android_ui_render(ui3, list3), "render gradient bg");
+    display_list_destroy(list3);
+    const uint8_t* px3 = nullptr;
+    int pitch3 = 0, w3 = 0, h3 = 0;
+    viewruntime_surface_pixels(surface3, &px3, &pitch3, &w3, &h3);
+    const uint8_t* p3 = px3 + 20 * pitch3 + 20 * 4;
+    expect(p3[3] != 0 && p3[2] < 32 && p3[1] > 5 && p3[1] < 40 &&
+           p3[0] > 20 && p3[0] < 70,
+           "gradient background painted navy, not black");
+
+    viewruntime_surface_destroy(surface3);
+    android_ui_destroy(ui3);
+    return;
+}
+
 } // namespace
 
 int main() {
@@ -946,6 +1195,7 @@ int main() {
     test_inflate_def_style_attr_and_text_color_link();
     test_inflate_axml_int_size_constants();
     test_inflate_button_text_centered();
+    test_inflate_button_pressed_color_swap();
     if (g_failures != 0) {
         std::fprintf(stderr, "%d FAILURES\n", g_failures);
         return 1;

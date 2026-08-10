@@ -56,6 +56,13 @@ public interface IAndroidViewBridge
     bool IsEnabled(DexObject view);
     void SetVisibility(DexObject view, int visibility);
     int GetVisibility(DexObject view);
+
+    /// <summary>Interaction visual state: pressed (mouse down) / hovered (mouse
+    /// enter) per hit-test result. ViewRuntime re-resolves the background from
+    /// the drawable's selector for the reported state instead of the stateless
+    /// default; no click dispatch involvement.</summary>
+    void SetPressed(DexObject view, bool pressed);
+    void SetHovered(DexObject view, bool hovered);
     void SetOnClickListener(DexObject view, DexObject? listener);
     bool PerformClick(DexObject view);
     void SetText(DexObject view, string? text);
@@ -121,6 +128,8 @@ public sealed class UnavailableAndroidViewBridge : IAndroidViewBridge
     public bool IsEnabled(DexObject view) { Throw(); return false; }
     public void SetVisibility(DexObject view, int visibility) { Throw(); }
     public int GetVisibility(DexObject view) { Throw(); return 0; }
+    public void SetPressed(DexObject view, bool pressed) { Throw(); }
+    public void SetHovered(DexObject view, bool hovered) { Throw(); }
     public void SetOnClickListener(DexObject view, DexObject? listener) { Throw(); }
     public bool PerformClick(DexObject view) { Throw(); return false; }
     public void SetText(DexObject view, string? text) { Throw(); }

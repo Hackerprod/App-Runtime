@@ -253,8 +253,18 @@ void apply_def_style_attr(android_ui_s* ui, android_view_s* view) {
  * solid color; no fallback is ever invented. */
 bool resolve_color(const android_ui_s* ui, const android_raw_value_t& v,
                    color_rgba* out); /* forward (mutual recursion) */
+/* Resolve a drawable/ColorStateList bag to a solid color. The bag comes from
+ * App Runtime's resolve_style channel: the stateless <item> is exposed as
+ * "color", and each state-specific <item> as an attr named by its state
+ * specifier ("state_pressed", "state_hovered", "state_enabled_false", ...)
+ * with the item's color as its value. AOSP StateListDrawable.onStateChange
+ * picks the FIRST item whose state set matches, then falls back to the
+ * wildcard/stateless item (StateListDrawable.java:104-115) — mirrored here:
+ * pressed item, else hovered item, else the stateless default. Never invents
+ * a color for a state the drawable does not declare. */
 bool resolve_drawable_solid(const android_ui_s* ui, uint32_t drawable_id,
-                            color_rgba* out) {
+                            color_rgba* out, bool pressed = false,
+                            bool hovered = false) {
     if (!ui->resolve_style) return false;
     const android_attr_t* attrs = nullptr;
     int32_t count = 0;
@@ -263,8 +273,37 @@ bool resolve_drawable_solid(const android_ui_s* ui, uint32_t drawable_id,
                            ui->bridge_data)) {
         return false;
     }
+    const char* want = nullptr;
+    if (pressed) want = "state_pressed";
+    else if (hovered) want = "state_hovered";
+    if (want != nullptr) {
+        /* First matching state-specific item, exactly like AOSP's
+         * indexOfStateSet (first match wins). */
+        for (int32_t i = 0; i < count; ++i) {
+            if (std::strcmp(attr_short(attrs[i].name), want) == 0) {
+                color_rgba c{};
+                if (resolve_color(ui, attrs[i].value, &c)) {
+                    *out = c;
+                    return true;
+                }
+            }
+        }
+        /* Honest fallback: the drawable has no item for this state — use the
+         * stateless default, do not fabricate a color. */
+    }
     for (int32_t i = 0; i < count; ++i) {
         if (std::strcmp(attr_short(attrs[i].name), "color") == 0) {
+            return resolve_color(ui, attrs[i].value, out);
+        }
+    }
+    /* GradientDrawable fallback: a <shape> with only <gradient> has no
+     * <solid> — its effective fill is the gradient's startColor (the color
+     * painted at the gradient's initial edge; for the page background
+     * angle=270, startColor is the dominant top color, GradientDrawable.java
+     * LINEAR_GRADIENT with startColor/endColor). The bag exposes startColor
+     * when App Runtime walks the gradient element. */
+    for (int32_t i = 0; i < count; ++i) {
+        if (std::strcmp(attr_short(attrs[i].name), "startColor") == 0) {
             return resolve_color(ui, attrs[i].value, out);
         }
     }
@@ -573,6 +612,11 @@ bool apply_attr(android_ui_s* ui, android_view_s* view,
         if (resolve_background(ui, v, &c)) {
             view->background_color = c;
             view->has_background = true;
+            /* Remember the source drawable (when it IS a drawable reference)
+             * so the render pass can re-resolve per interaction state. */
+            if (v.kind == ANDROID_RAW_TYPE_REFERENCE) {
+                view->background_drawable_id = v.ref_id;
+            }
             return true;
         }
         /* A non-solid drawable (gradient/selector with states, etc.) is not
@@ -733,6 +777,35 @@ bool apply_attr(android_ui_s* ui, android_view_s* view,
 }
 
 } // namespace
+} // namespace viewruntime::android
+
+namespace viewruntime::android {
+
+/* Re-resolve a view's background honoring its current interaction state.
+ * Views whose background came from a drawable (background_drawable_id != 0)
+ * re-resolve the color from the ColorStateList/selector for pressed/hovered;
+ * flat-color backgrounds stay as set. Returns false when the state-specific
+ * lookup has nothing to offer AND the stateless default also fails (caller
+ * keeps the last good color). Needs external linkage (called from the
+ * display-list recorder), so it lives outside the anonymous namespace. */
+bool resolve_background_for_state(const android_ui_s* ui,
+                                  const android_view_s* view,
+                                  color_rgba* out) {
+    if (!view->has_background) return false;
+    if (view->background_drawable_id == 0) {
+        *out = view->background_color;
+        return true;
+    }
+    /* resolve_drawable_solid (anonymous) is still reachable from here: the
+     * anonymous namespace is nested inside viewruntime::android, so an
+     * unqualified call in this TU resolves to it. */
+    if (resolve_drawable_solid(ui, view->background_drawable_id, out,
+                               view->pressed, view->hovered)) {
+        return true;
+    }
+    return false;
+}
+
 } // namespace viewruntime::android
 
 extern "C" {

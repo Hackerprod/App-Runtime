@@ -61,11 +61,16 @@ public sealed class AndroidResourceQueryService
     }
 
     /// <summary>Drawable fallback: resolve the id to its file path, parse the
-    /// binary AXML, and extract the effective default color as a bag of one
-    /// android:color attribute. Default-state semantics match AOSP ColorStateList:
-    /// prefer an item with NO state spec (skips android:state_enabled=false etc);
-    /// fall back to the first literal color only when no stateless item exists.
-    /// Returns null when the id is neither a style nor a file-backed drawable.</summary>
+    /// binary AXML, and extract the FULL drawable bag: the effective default
+    /// color as an android:color attribute PLUS one attribute per recognized
+    /// state item (android:state_pressed="true" -> attr named state_pressed;
+    /// android:state_hovered="true" -> attr named state_hovered) so ViewRuntime
+    /// can drive real selectors (pressed/hovered feedback) instead of only the
+    /// flattened default color. Default-state semantics match AOSP
+    /// ColorStateList: prefer an item with NO state spec (skips
+    /// android:state_enabled=false etc); fall back to the first literal color
+    /// only when no stateless item exists. Returns null when the id is neither
+    /// a style nor a file-backed drawable.</summary>
     private AndroidResourceStyleLink? ResolveDrawableBag(uint styleId)
     {
         string? path = ResourceFilePath(styleId);
@@ -73,9 +78,9 @@ public sealed class AndroidResourceQueryService
         try
         {
             AndroidXmlDocument document = AndroidBinaryXmlReader.Parse(raw);
-            AndroidInflateAttribute? color = FindDrawableColor(document.Root);
-            if (color is null) return null;
-            return new AndroidResourceStyleLink(styleId, 0, [color]);
+            AndroidInflateAttribute[]? bag = FindDrawableBag(document.Root);
+            if (bag is null) return null;
+            return new AndroidResourceStyleLink(styleId, 0, bag);
         }
         catch (InvalidDataException) { return null; }
     }
@@ -90,33 +95,59 @@ public sealed class AndroidResourceQueryService
         catch (KeyNotFoundException) { return null; }
     }
 
-    /// <summary>Walks a drawable/color XML tree for its effective default color,
-    /// matching AOSP semantics:
-    /// — shape drawable: a &lt;solid android:color&gt; inside a &lt;shape&gt;, preferring
-    ///   the one in a STATELESS &lt;item&gt; (selector default) over a state-specified
-    ///   item, and preferring a &lt;solid&gt; fill over a &lt;ripple&gt;/&lt;item&gt;
-    ///   top-level color (the ripple color is touch feedback, not background).
-    /// — ColorStateList: a stateless &lt;item android:color&gt; (the default state),
-    ///   skipping state-specified items (e.g. android:state_enabled=false).
-    /// Returns null when no color is present.</summary>
-    private static AndroidInflateAttribute? FindDrawableColor(AndroidXmlElement element)
+    /// <summary>Walks a drawable/color XML tree and returns the FULL drawable
+    /// bag (null when no color is present anywhere):
+    /// — the effective default color as an attribute named <c>color</c>, matching
+    ///   AOSP semantics: shape drawable -> a &lt;solid android:color&gt; inside a
+    ///   &lt;shape&gt;, preferring the one in a STATELESS &lt;item&gt; (selector default)
+    ///   over a state-specified item, and preferring a &lt;solid&gt; fill over a
+    ///   &lt;ripple&gt;/&lt;item&gt; top-level color (the ripple color is touch feedback,
+    ///   not background); ColorStateList -> a stateless &lt;item android:color&gt;,
+    ///   skipping state-specified items (e.g. android:state_enabled=false);
+    /// — a &lt;gradient android:startColor&gt; (GradientDrawable) exposed as an
+    ///   attribute named <c>startColor</c> with the same default-vs-state rules
+    ///   (ViewRuntime uses it as the fallback when the bag has no color/solid);
+    /// — PLUS one attribute per item/solid with a recognized state specifier:
+    ///   <c>android:state_pressed="true"</c> -> attr named <c>state_pressed</c>,
+    ///   <c>android:state_hovered="true"</c> -> attr named <c>state_hovered</c>
+    ///   (the first recognized specifier names the item; other states and
+    ///   false-valued specifiers are not modeled and stay out of the bag).
+    /// Internal so tests can construct selector trees directly.</summary>
+    internal static AndroidInflateAttribute[]? FindDrawableBag(AndroidXmlElement element)
     {
         AndroidInflateAttribute? solidDefault = null;
         AndroidInflateAttribute? solidAny = null;
         AndroidInflateAttribute? itemDefault = null;
         AndroidInflateAttribute? itemFallback = null;
-        Walk(element, nearestItemHasState: null, ref solidDefault, ref solidAny, ref itemDefault, ref itemFallback);
+        AndroidInflateAttribute? gradientDefault = null;
+        AndroidInflateAttribute? gradientAny = null;
+        var stateColors = new List<AndroidInflateAttribute>();
+        Walk(element, nearestItemHasState: null, nearestItemState: null, ref solidDefault, ref solidAny, ref itemDefault, ref itemFallback, ref gradientDefault, ref gradientAny, stateColors);
         // Priority: default-state solid fill (the real background) >
-        // ColorStateList default item > any solid > any item.
-        return solidDefault ?? itemDefault ?? solidAny ?? itemFallback;
+        // ColorStateList default item > any solid > any item > gradient
+        // startColor (GradientDrawable fallback).
+        AndroidInflateAttribute? color = solidDefault ?? itemDefault ?? solidAny ?? itemFallback;
+        AndroidInflateAttribute? startColor = gradientDefault ?? gradientAny;
+        if (color is null && startColor is null && stateColors.Count == 0) return null;
+        var bag = new List<AndroidInflateAttribute>(stateColors.Count + 2);
+        if (color is not null) bag.Add(color);
+        if (startColor is not null) bag.Add(startColor);
+        bag.AddRange(stateColors);
+        return bag.ToArray();
     }
 
-    private static void Walk(AndroidXmlElement element, bool? nearestItemHasState, ref AndroidInflateAttribute? solidDefault, ref AndroidInflateAttribute? solidAny, ref AndroidInflateAttribute? itemDefault, ref AndroidInflateAttribute? itemFallback)
+    private static void Walk(AndroidXmlElement element, bool? nearestItemHasState, AndroidXmlAttribute? nearestItemState, ref AndroidInflateAttribute? solidDefault, ref AndroidInflateAttribute? solidAny, ref AndroidInflateAttribute? itemDefault, ref AndroidInflateAttribute? itemFallback, ref AndroidInflateAttribute? gradientDefault, ref AndroidInflateAttribute? gradientAny, List<AndroidInflateAttribute> stateColors)
     {
-        // Track the NEAREST ancestor <item> and whether it has a state spec.
+        // Track the NEAREST ancestor <item>: whether it has any state spec
+        // (for default-vs-fallback priority) and its recognized state attribute
+        // (for selector bag entries; a <solid> inside a state <item> inherits it).
         bool? currentItemState = nearestItemHasState;
+        AndroidXmlAttribute? currentItemStateAttr = nearestItemState;
         if (element.Name == "item")
+        {
             currentItemState = HasStateSpecifiers(element);
+            currentItemStateAttr = RecognizedStateAttribute(element);
+        }
 
         // A <solid> inside a <shape>: the painted fill. Default = inside a
         // stateless <item> (the selector's default branch).
@@ -126,6 +157,17 @@ public sealed class AndroidResourceQueryService
         {
             if (currentItemState == false && solidDefault is null) solidDefault = solidColor;
             solidAny ??= solidColor;
+            if (currentItemStateAttr is not null) stateColors.Add(NamedStateColor(solidColor, currentItemStateAttr));
+        }
+        // A <gradient android:startColor>: GradientDrawable without a <solid>.
+        // Exposed as "startColor" with the same default-vs-state rules.
+        else if (element.Name == "gradient" &&
+                 TryNamedAttribute(element, "startColor", out AndroidInflateAttribute? gradientColor) &&
+                 gradientColor is not null)
+        {
+            if (currentItemState == false && gradientDefault is null) gradientDefault = gradientColor;
+            gradientAny ??= gradientColor;
+            if (currentItemStateAttr is not null) stateColors.Add(NamedStateColor(gradientColor, currentItemStateAttr));
         }
         // A direct <item android:color>: the stateless item is the default.
         else if (element.Name == "item" &&
@@ -134,20 +176,49 @@ public sealed class AndroidResourceQueryService
         {
             if (currentItemState == false && itemDefault is null) itemDefault = itemColor;
             itemFallback ??= itemColor;
+            if (currentItemStateAttr is not null) stateColors.Add(NamedStateColor(itemColor, currentItemStateAttr));
         }
 
         foreach (AndroidXmlElement child in element.Children)
-            Walk(child, currentItemState, ref solidDefault, ref solidAny, ref itemDefault, ref itemFallback);
+            Walk(child, currentItemState, currentItemStateAttr, ref solidDefault, ref solidAny, ref itemDefault, ref itemFallback, ref gradientDefault, ref gradientAny, stateColors);
     }
+
+    /// <summary>Repackages a color attribute as the selector state entry: same
+    /// color value, but named after the recognized state (state_pressed /
+    /// state_hovered) and carrying that state attribute's own resource id /
+    /// namespace so the native can match by name or by id.</summary>
+    private static AndroidInflateAttribute NamedStateColor(AndroidInflateAttribute color, AndroidXmlAttribute stateAttribute) =>
+        color with { Name = stateAttribute.Name, ResourceId = stateAttribute.ResourceId, NamespaceUri = stateAttribute.NamespaceUri };
+
+    /// <summary>First recognized state specifier of an item, or null. Order:
+    /// state_pressed, then state_hovered (the first recognized specifier wins —
+    /// no multi-state combinations are modeled). A specifier counts only when
+    /// its literal value is true (android:state_pressed="true"); references and
+    /// false values are not modeled.</summary>
+    private static AndroidXmlAttribute? RecognizedStateAttribute(AndroidXmlElement element)
+    {
+        foreach (AndroidXmlAttribute attribute in element.Attributes)
+        {
+            if (attribute.Name == "state_pressed" && IsTrue(attribute.Value)) return attribute;
+            if (attribute.Name == "state_hovered" && IsTrue(attribute.Value)) return attribute;
+        }
+        return null;
+    }
+
+    private static bool IsTrue(AndroidResourceValue value) =>
+        value.Kind == AndroidResourceValueKind.Boolean && value.Data != 0;
 
     private static bool HasStateSpecifiers(AndroidXmlElement element) =>
         element.Attributes.Any(attribute => attribute.Name.StartsWith("state_", StringComparison.Ordinal));
 
-    private static bool TryColorAttribute(AndroidXmlElement element, out AndroidInflateAttribute? color)
+    private static bool TryColorAttribute(AndroidXmlElement element, out AndroidInflateAttribute? color) =>
+        TryNamedAttribute(element, "color", out color);
+
+    private static bool TryNamedAttribute(AndroidXmlElement element, string name, out AndroidInflateAttribute? attribute)
     {
-        AndroidXmlAttribute? attribute = element.Attributes.FirstOrDefault(item => item.Name == "color");
-        if (attribute is null) { color = null; return false; }
-        color = new AndroidInflateAttribute(attribute.NamespaceUri, attribute.Name, attribute.ResourceId, AndroidInflateSerializer.FromValue(attribute.Value));
+        AndroidXmlAttribute? found = element.Attributes.FirstOrDefault(item => item.Name == name);
+        if (found is null) { attribute = null; return false; }
+        attribute = new AndroidInflateAttribute(found.NamespaceUri, found.Name, found.ResourceId, AndroidInflateSerializer.FromValue(found.Value));
         return true;
     }
 

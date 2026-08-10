@@ -400,6 +400,13 @@ API status_t android_view_set_layout_params(
 API status_t android_view_set_visibility(android_view_t view, int32_t visibility);
 API status_t android_view_set_enabled(android_view_t view, bool_t enabled);
 API status_t android_view_set_background_color(android_view_t view, color_rgba color);
+/* Interaction visual state (desktop-host addition over AOSP touch model):
+ * the host reports mouse-down (pressed) and mouse-enter (hovered) per
+ * HitTest result and re-requests a frame; ViewRuntime re-resolves the
+ * background from the drawable's ColorStateList/selector for that state
+ * instead of always the stateless default. No dispatch involvement. */
+API status_t android_view_set_pressed(android_view_t view, bool_t pressed);
+API status_t android_view_set_hovered(android_view_t view, bool_t hovered);
 API status_t android_view_set_padding_dp(android_view_t view, float padding_dp);
 API status_t android_view_set_padding_edges_dp(android_view_t view, thicknessf padding_dp);
 API status_t android_view_set_min_size_dp(android_view_t view, float min_width_dp, float min_height_dp);

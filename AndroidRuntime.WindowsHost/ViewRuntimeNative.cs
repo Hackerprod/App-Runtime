@@ -65,6 +65,17 @@ internal static partial class ViewRuntimeBridgeNative
     [LibraryImport(Dll)]
     internal static partial int android_view_set_enabled(nint view, byte enabled);
 
+    // Interaction visual state (android.h:408-409): host reports mouse-down
+    // (pressed) / mouse-enter (hovered); ViewRuntime re-resolves the background
+    // from the drawable's selector for that state. Status_t return. NOTE:
+    // bool_t in the native ABI is int32_t (viewruntime.h:62) — a byte arg would
+    // be a signature mismatch (the get_resource_id lesson).
+    [LibraryImport(Dll)]
+    internal static partial int android_view_set_pressed(nint view, int pressed);
+
+    [LibraryImport(Dll)]
+    internal static partial int android_view_set_hovered(nint view, int hovered);
+
     [LibraryImport(Dll)]
     internal static partial int android_view_set_background_color(nint view, AndroidColorRgba color);
 

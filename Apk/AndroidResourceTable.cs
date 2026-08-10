@@ -42,6 +42,7 @@ public readonly struct AndroidResourceValue
     public static AndroidResourceValue Reference(uint id) => new(AndroidResourceValueKind.Reference, id, null);
     public static AndroidResourceValue String(string value) => new(AndroidResourceValueKind.String, 0, value);
     public static AndroidResourceValue Color(uint value) => new(AndroidResourceValueKind.Color, value, null);
+    public static AndroidResourceValue Boolean(bool value) => new(AndroidResourceValueKind.Boolean, value ? 1u : 0u, null);
     public static AndroidResourceValue Dimension(uint encoded) => new(AndroidResourceValueKind.Dimension, encoded, DecodeDimension(encoded));
     public static AndroidResourceValue Fraction(uint encoded) => new(AndroidResourceValueKind.Fraction, encoded, DecodeFraction(encoded));
     public uint AsReference() => Kind == AndroidResourceValueKind.Reference ? Data : throw Wrong(AndroidResourceValueKind.Reference);

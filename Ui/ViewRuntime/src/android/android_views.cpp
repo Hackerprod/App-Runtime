@@ -260,6 +260,22 @@ API status_t android_view_set_background_color(
     if (!view) return ERROR_NULL_ARG;
     view->background_color = color;
     view->has_background = true;
+    /* A flat color set directly replaces any drawable source. */
+    view->background_drawable_id = 0;
+    return OK;
+}
+
+API status_t android_view_set_pressed(
+    android_view_t view, bool_t pressed) {
+    if (!view) return ERROR_NULL_ARG;
+    view->pressed = pressed != FALSE;
+    return OK;
+}
+
+API status_t android_view_set_hovered(
+    android_view_t view, bool_t hovered) {
+    if (!view) return ERROR_NULL_ARG;
+    view->hovered = hovered != FALSE;
     return OK;
 }
 
