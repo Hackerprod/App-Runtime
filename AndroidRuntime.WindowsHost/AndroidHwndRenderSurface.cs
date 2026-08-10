@@ -14,7 +14,7 @@ namespace AndroidRuntime.WindowsHost;
 internal sealed partial class AndroidHwndRenderSurface : HwndHost
 {
     private const int WsChild = 0x40000000, WsVisible = 0x10000000, WsTabStop = 0x00010000;
-    private const int WmPaint = 0x000F, WmEraseBackground = 0x0014, WmLButtonDown = 0x0201, WmLButtonUp = 0x0202, WmKeyDown = 0x0100, WmMouseMove = 0x0200, WmMouseLeave = 0x02A3;
+    private const int WmPaint = 0x000F, WmEraseBackground = 0x0014, WmLButtonDown = 0x0201, WmLButtonUp = 0x0202, WmKeyDown = 0x0100, WmMouseMove = 0x0200, WmMouseLeave = 0x02A3, WmMouseWheel = 0x020A;
     private const int VkReturn = 0x0D, VkSpace = 0x20;
     private const uint TmeLeave = 0x00000002;
     private readonly WindowsRetainedRenderer _renderer = new();
@@ -24,6 +24,7 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
     private int? _pressedId;
     private int? _focusedId;
     private int? _hoveredId;
+    private float _scrollY;
     private long _revision;
     private int _frameInFlight, _frameAgain, _disposed;
 
@@ -110,6 +111,36 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
             case WmMouseLeave:
                 if (_hoveredId is int leaveId) { SetHovered(leaveId, false); _hoveredId = null; RequestFrame(); }
                 handled = true; return 0;
+            case WmMouseWheel:
+                if (!InputEnabled) break;
+                // lParam is in SCREEN coordinates for WM_MOUSEWHEEL (unlike the
+                // button messages) — convert to surface-client before hit-test.
+                int wheelDelta = (short)((long)wParam >> 16); // GET_WHEEL_DELTA, ±120/notch
+                if (wheelDelta != 0)
+                {
+                    var wheelPoint = new PointStruct { X = SignedLow(lParam), Y = SignedHigh(lParam) };
+                    Native.ScreenToClient(hwnd, ref wheelPoint);
+                    AndroidHostedActivitySession? wheelSession = _session;
+                    if (wheelSession is null) break;
+                    int? wheelHit = wheelSession.ViewBridge.HitTest(wheelPoint.X, wheelPoint.Y);
+                    if (wheelHit is int wheelId && wheelId != 0)
+                    {
+                        DexObject? wheelView = wheelSession.ViewBridge.FindViewById(wheelId);
+                        if (wheelView is not null)
+                        {
+                            // Accumulate raw wheel delta as pixels: Windows default
+                            // is 3 lines per notch and the standard line height is
+                            // ~40px, so 120px/notch == the raw delta; partial deltas
+                            // from touchpads accumulate naturally. ViewRuntime clamps
+                            // the range on its layout side. Horizontal scroll is not
+                            // wired yet — x stays 0.
+                            _scrollY += wheelDelta;
+                            wheelSession.ViewBridge.SetScrollOffset(wheelView, 0f, _scrollY);
+                            RequestFrame();
+                        }
+                    }
+                }
+                handled = true; return 0;
             case WmKeyDown when InputEnabled && (wParam == VkReturn || wParam == VkSpace):
                 if (_focusedId is int focused) EnqueueClick(focused);
                 handled = true; return 0;
@@ -194,6 +225,7 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
 
     [StructLayout(LayoutKind.Sequential)] private unsafe struct PaintStruct { internal nint Hdc; internal int Erase; internal Rect Rect; internal int Restore; internal int IncUpdate; internal fixed byte Reserved[32]; }
     [StructLayout(LayoutKind.Sequential)] private struct Rect { internal int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] private struct PointStruct { internal int X, Y; }
     [StructLayout(LayoutKind.Sequential)] private struct TrackMouseEventStruct
     {
         internal uint Size;
@@ -212,5 +244,6 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
         [LibraryImport("user32.dll")] internal static partial nint SetCapture(nint hwnd);
         [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool ReleaseCapture();
         [LibraryImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool TrackMouseEvent(ref TrackMouseEventStruct tme);
+        [LibraryImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool ScreenToClient(nint hwnd, ref PointStruct point);
     }
 }

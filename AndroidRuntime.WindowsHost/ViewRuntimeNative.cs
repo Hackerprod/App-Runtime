@@ -125,6 +125,17 @@ internal static partial class ViewRuntimeBridgeNative
     [LibraryImport(Dll)]
     internal static partial nint android_ui_find_view_by_id(nint ui, int resource_id);
 
+    // Post-layout hierarchy (android.h:388): parent walk needed to resolve the
+    // scroll container of a hit-tested view (the hit is the DEEPEST view; the
+    // ScrollView ancestor is what accepts set_scroll_offset).
+    [LibraryImport(Dll)]
+    internal static partial nint android_view_get_parent(nint view);
+
+    // ScrollView/ListView/RecyclerView offset (android.h:588): accepts only
+    // scroll-container classes, clamps negatives, range is clamped by layout.
+    [LibraryImport(Dll)]
+    internal static partial int android_view_set_scroll_offset(nint view, float x, float y);
+
     [LibraryImport(Dll)]
     internal static partial nint android_ui_hit_test(nint ui, nint root, float x, float y);
 

@@ -257,6 +257,32 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
         ViewRuntimeBridgeNative.android_view_set_hovered(NativeOf(view), (byte)(hovered ? 1 : 0));
     }
 
+    public void SetScrollOffset(DexObject view, float x, float y)
+    {
+        RequireAvailable();
+        // The hit-tested view is the DEEPEST view at the pointer; the native
+        // set_scroll_offset accepts only scroll-container classes, so resolve
+        // the nearest ScrollView/ListView/RecyclerView ancestor. Range clamping
+        // is ViewRuntime's job (layout side) — never duplicated here.
+        nint native = NativeOf(view);
+        nint container = FindScrollContainer(native);
+        if (container != 0)
+            ViewRuntimeBridgeNative.android_view_set_scroll_offset(container, x, y);
+    }
+
+    private static nint FindScrollContainer(nint view)
+    {
+        // android_view_class enum: ScrollView=4, ListView=13, RecyclerView=14.
+        for (nint current = view; current != 0; current = ViewRuntimeBridgeNative.android_view_get_parent(current))
+        {
+            int cls;
+            try { cls = ViewRuntimeBridgeNative.android_view_get_class(current); }
+            catch (Exception) { return 0; }
+            if (cls is 4 or 13 or 14) return current;
+        }
+        return 0;
+    }
+
     public void SetVisibility(DexObject view, int visibility)
     {
         RequireAvailable();

@@ -63,6 +63,12 @@ public interface IAndroidViewBridge
     /// default; no click dispatch involvement.</summary>
     void SetPressed(DexObject view, bool pressed);
     void SetHovered(DexObject view, bool hovered);
+
+    /// <summary>Real mouse-wheel scroll: given the hit-tested (deepest) view,
+    /// resolves the nearest SCROLL container ancestor and applies the
+    /// accumulated pixel offset. ViewRuntime clamps the range on its side; this
+    /// side never duplicates that logic.</summary>
+    void SetScrollOffset(DexObject view, float x, float y);
     void SetOnClickListener(DexObject view, DexObject? listener);
     bool PerformClick(DexObject view);
     void SetText(DexObject view, string? text);
@@ -130,6 +136,7 @@ public sealed class UnavailableAndroidViewBridge : IAndroidViewBridge
     public int GetVisibility(DexObject view) { Throw(); return 0; }
     public void SetPressed(DexObject view, bool pressed) { Throw(); }
     public void SetHovered(DexObject view, bool hovered) { Throw(); }
+    public void SetScrollOffset(DexObject view, float x, float y) { Throw(); }
     public void SetOnClickListener(DexObject view, DexObject? listener) { Throw(); }
     public bool PerformClick(DexObject view) { Throw(); return false; }
     public void SetText(DexObject view, string? text) { Throw(); }

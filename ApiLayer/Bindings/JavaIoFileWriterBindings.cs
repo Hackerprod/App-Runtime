@@ -71,5 +71,5 @@ internal static class JavaIoFileWriterBindings
     /// <summary>Reads a java.io.File's path from its instance field (empty when
     /// the File has none). The FileWriter reuses the same slot for its target.</summary>
     private static string FilePathOf(DexObject file) =>
-        file.InstanceFields.TryGetValue(FilePathField, out object value) && value is string path ? path : string.Empty;
+        file.InstanceFields.TryGetValue(FilePathField, out object? value) && value is string path ? path : string.Empty;
 }
