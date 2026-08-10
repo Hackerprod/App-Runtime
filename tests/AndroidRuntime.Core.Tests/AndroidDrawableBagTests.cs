@@ -133,10 +133,14 @@ public sealed class AndroidDrawableBagTests
         AndroidInflateAttribute[]? bag = AndroidResourceQueryService.FindDrawableBag(root);
 
         Assert.NotNull(bag);
-        Assert.Single(bag);
+        Assert.Equal(2, bag!.Length);
         Assert.Equal("startColor", bag[0].Name);
         Assert.Equal(0xFF0B1020u, bag[0].Value.Data);
         Assert.Equal(0x0101019Du, bag[0].ResourceId);
+        // endColor is now a sibling attr (the fixture has it; it was silently
+        // dropped before the bag extension).
+        Assert.Equal("endColor", bag[1].Name);
+        Assert.Equal(0xFF111A33u, bag[1].Value.Data);
     }
 
     [Fact]
@@ -243,6 +247,94 @@ public sealed class AndroidDrawableBagTests
         Assert.Equal("state_pressed", bag[2].Name);
         Assert.Equal(AndroidRawValueKind.Dimension, bag[2].Value.Kind);
         Assert.Equal(StatePressedId, bag[2].ResourceId);
+    }
+
+    [Fact]
+    public void Gradient_with_end_color_angle_and_type_exposes_all_attrs()
+    {
+        var root = new AndroidXmlElement(AndroidNs, "shape", 1, []);
+        root.MutableChildren.Add(new AndroidXmlElement(AndroidNs, "gradient", 2,
+        [
+            new(AndroidNs, "startColor", 0x0101019D, null, AndroidResourceValue.Color(0xFF0B1020)),
+            new(AndroidNs, "endColor", 0x0101019E, null, AndroidResourceValue.Color(0xFF111A33)),
+            new(AndroidNs, "angle", 0x01010041, null, AndroidResourceValue.FromBinary(0x10, 0, [], "TEST")),
+            new(AndroidNs, "type", 0x0101003A, null, AndroidResourceValue.FromBinary(0x10, 2, [], "TEST")) // sweep
+        ]));
+
+        AndroidInflateAttribute[]? bag = AndroidResourceQueryService.FindDrawableBag(root);
+
+        Assert.NotNull(bag);
+        Assert.Equal(4, bag!.Length);
+        Assert.Equal("startColor", bag[0].Name);
+        Assert.Equal("endColor", bag[1].Name);
+        Assert.Equal(0xFF111A33u, bag[1].Value.Data);
+        Assert.Equal("angle", bag[2].Name);
+        Assert.Equal(AndroidRawValueKind.IntDecimal, bag[2].Value.Kind);
+        Assert.Equal(0u, bag[2].Value.Data);
+        Assert.Equal("type", bag[3].Name);
+        Assert.Equal(2u, bag[3].Value.Data);
+    }
+
+    [Fact]
+    public void Shape_with_stroke_exposes_stroke_width_and_color()
+    {
+        var root = new AndroidXmlElement(AndroidNs, "shape", 1, []);
+        root.MutableChildren.Add(new AndroidXmlElement(AndroidNs, "solid", 2, [Color("color", 0xFF336699)]));
+        root.MutableChildren.Add(new AndroidXmlElement(AndroidNs, "stroke", 3,
+        [
+            new(AndroidNs, "width", 0x0101013D, null, AndroidResourceValue.Dimension(0x00000101)), // 1dp
+            new(AndroidNs, "color", 0x0101019C, null, AndroidResourceValue.Color(0xFF2A2F3F))
+        ]));
+
+        AndroidInflateAttribute[]? bag = AndroidResourceQueryService.FindDrawableBag(root);
+
+        Assert.NotNull(bag);
+        Assert.Equal(3, bag!.Length);
+        Assert.Equal("color", bag[0].Name);
+        Assert.Equal("strokeWidth", bag[1].Name);
+        Assert.Equal(AndroidRawValueKind.Dimension, bag[1].Value.Kind);
+        Assert.True(Math.Abs(bag[1].Value.FloatValue - 1f) < 0.001f);
+        Assert.Equal(1, bag[1].Value.Unit); // dp
+        Assert.Equal("strokeColor", bag[2].Name);
+        Assert.Equal(0xFF2A2F3Fu, bag[2].Value.Data);
+    }
+
+    [Fact]
+    public void Shape_shape_attribute_is_exposed()
+    {
+        var root = new AndroidXmlElement(AndroidNs, "shape", 1,
+        [
+            new(AndroidNs, "shape", 0x0101007c, null, AndroidResourceValue.FromBinary(0x10, 1, [], "TEST")) // oval
+        ]);
+        root.MutableChildren.Add(new AndroidXmlElement(AndroidNs, "solid", 2, [Color("color", 0xFF336699)]));
+
+        AndroidInflateAttribute[]? bag = AndroidResourceQueryService.FindDrawableBag(root);
+
+        Assert.NotNull(bag);
+        Assert.Equal(2, bag!.Length);
+        Assert.Equal("color", bag[0].Name);
+        Assert.Equal("shape", bag[1].Name);
+        Assert.Equal(1u, bag[1].Value.Data);
+        Assert.Equal(0x0101007cu, bag[1].ResourceId);
+    }
+
+    [Fact]
+    public void Stroke_without_any_fill_is_still_paintable()
+    {
+        var root = new AndroidXmlElement(AndroidNs, "shape", 1, []);
+        root.MutableChildren.Add(new AndroidXmlElement(AndroidNs, "stroke", 2,
+        [
+            new(AndroidNs, "width", 0x0101013D, null, AndroidResourceValue.Dimension(0x00000101)),
+            new(AndroidNs, "color", 0x0101019C, null, AndroidResourceValue.Color(0xFF2A2F3F))
+        ]));
+
+        // A stroke paints a border even with no fill — the bag must survive.
+        AndroidInflateAttribute[]? bag = AndroidResourceQueryService.FindDrawableBag(root);
+
+        Assert.NotNull(bag);
+        Assert.Equal(2, bag!.Length);
+        Assert.Equal("strokeWidth", bag[0].Name);
+        Assert.Equal("strokeColor", bag[1].Name);
     }
 
     private static AndroidXmlElement Item(int line, AndroidXmlAttribute[] attributes) =>

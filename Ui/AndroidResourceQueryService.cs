@@ -107,6 +107,14 @@ public sealed class AndroidResourceQueryService
     /// — a &lt;gradient android:startColor&gt; (GradientDrawable) exposed as an
     ///   attribute named <c>startColor</c> with the same default-vs-state rules
     ///   (ViewRuntime uses it as the fallback when the bag has no color/solid);
+    /// — a &lt;gradient android:endColor&gt; exposed as <c>endColor</c> (sibling of
+    ///   startColor, same rules), a &lt;gradient android:angle&gt; exposed as
+    ///   <c>angle</c> and a &lt;gradient android:type&gt; (linear/radial/sweep)
+    ///   exposed as <c>type</c>;
+    /// — a &lt;stroke android:width/android:color&gt; exposed as <c>strokeWidth</c> /
+    ///   <c>strokeColor</c> (a stroke paints a border even without a fill);
+    /// — the &lt;shape android:shape&gt; (rectangle/oval/line/ring) exposed as
+    ///   <c>shape</c>;
     /// — a &lt;corners android:radius&gt; exposed as an attribute named
     ///   <c>radius</c> (a raw dimension) with the same default-vs-state rules;
     /// — PLUS one attribute per item/solid with a recognized state specifier:
@@ -117,34 +125,58 @@ public sealed class AndroidResourceQueryService
     /// Internal so tests can construct selector trees directly.</summary>
     internal static AndroidInflateAttribute[]? FindDrawableBag(AndroidXmlElement element)
     {
-        AndroidInflateAttribute? solidDefault = null;
-        AndroidInflateAttribute? solidAny = null;
-        AndroidInflateAttribute? itemDefault = null;
-        AndroidInflateAttribute? itemFallback = null;
-        AndroidInflateAttribute? gradientDefault = null;
-        AndroidInflateAttribute? gradientAny = null;
-        AndroidInflateAttribute? cornersDefault = null;
-        AndroidInflateAttribute? cornersAny = null;
-        var stateColors = new List<AndroidInflateAttribute>();
-        Walk(element, nearestItemHasState: null, nearestItemState: null, ref solidDefault, ref solidAny, ref itemDefault, ref itemFallback, ref gradientDefault, ref gradientAny, ref cornersDefault, ref cornersAny, stateColors);
+        var builder = new DrawableBagBuilder();
+        Walk(element, nearestItemHasState: null, nearestItemState: null, builder);
         // Priority: default-state solid fill (the real background) >
         // ColorStateList default item > any solid > any item > gradient
         // startColor (GradientDrawable fallback).
-        AndroidInflateAttribute? color = solidDefault ?? itemDefault ?? solidAny ?? itemFallback;
-        AndroidInflateAttribute? startColor = gradientDefault ?? gradientAny;
-        AndroidInflateAttribute? radius = cornersDefault ?? cornersAny;
-        // radius alone is not a paintable bag (a shape with corners but no fill
-        // draws nothing) — the bag stays null until some color is present.
-        if (color is null && startColor is null && stateColors.Count == 0) return null;
-        var bag = new List<AndroidInflateAttribute>(stateColors.Count + 3);
+        AndroidInflateAttribute? color = builder.SolidDefault ?? builder.ItemDefault ?? builder.SolidAny ?? builder.ItemFallback;
+        AndroidInflateAttribute? startColor = builder.GradientStartDefault ?? builder.GradientStartAny;
+        AndroidInflateAttribute? endColor = builder.GradientEndDefault ?? builder.GradientEndAny;
+        AndroidInflateAttribute? angle = builder.GradientAngleDefault ?? builder.GradientAngleAny;
+        AndroidInflateAttribute? gradientType = builder.GradientTypeDefault ?? builder.GradientTypeAny;
+        AndroidInflateAttribute? radius = builder.CornersDefault ?? builder.CornersAny;
+        AndroidInflateAttribute? strokeWidth = builder.StrokeWidthDefault ?? builder.StrokeWidthAny;
+        AndroidInflateAttribute? strokeColor = builder.StrokeColorDefault ?? builder.StrokeColorAny;
+        AndroidInflateAttribute? shape = builder.ShapeDefault ?? builder.ShapeAny;
+        // radius/angle/type/shape alone are not a paintable bag (a shape with
+        // corners but no fill draws nothing) — the bag stays null until some
+        // color is present. A stroke DOES paint (a border), so it counts.
+        if (color is null && startColor is null && strokeColor is null && builder.StateColors.Count == 0) return null;
+        var bag = new List<AndroidInflateAttribute>(builder.StateColors.Count + 9);
         if (color is not null) bag.Add(color);
         if (startColor is not null) bag.Add(startColor);
+        if (endColor is not null) bag.Add(endColor);
+        if (angle is not null) bag.Add(angle);
+        if (gradientType is not null) bag.Add(gradientType);
         if (radius is not null) bag.Add(radius);
-        bag.AddRange(stateColors);
+        if (strokeWidth is not null) bag.Add(strokeWidth);
+        if (strokeColor is not null) bag.Add(strokeColor);
+        if (shape is not null) bag.Add(shape);
+        bag.AddRange(builder.StateColors);
         return bag.ToArray();
     }
 
-    private static void Walk(AndroidXmlElement element, bool? nearestItemHasState, AndroidXmlAttribute? nearestItemState, ref AndroidInflateAttribute? solidDefault, ref AndroidInflateAttribute? solidAny, ref AndroidInflateAttribute? itemDefault, ref AndroidInflateAttribute? itemFallback, ref AndroidInflateAttribute? gradientDefault, ref AndroidInflateAttribute? gradientAny, ref AndroidInflateAttribute? cornersDefault, ref AndroidInflateAttribute? cornersAny, List<AndroidInflateAttribute> stateColors)
+    /// <summary>Accumulates the default-vs-state candidates across the walk.
+    /// Every recognized element branch feeds the same pair of slots: the
+    /// DEFAULT value (inside a stateless item) and the ANY fallback (the first
+    /// value regardless of state), resolved as Default ?? Any at the end.</summary>
+    private sealed class DrawableBagBuilder
+    {
+        public AndroidInflateAttribute? SolidDefault, SolidAny;
+        public AndroidInflateAttribute? ItemDefault, ItemFallback;
+        public AndroidInflateAttribute? GradientStartDefault, GradientStartAny;
+        public AndroidInflateAttribute? GradientEndDefault, GradientEndAny;
+        public AndroidInflateAttribute? GradientAngleDefault, GradientAngleAny;
+        public AndroidInflateAttribute? GradientTypeDefault, GradientTypeAny;
+        public AndroidInflateAttribute? CornersDefault, CornersAny;
+        public AndroidInflateAttribute? StrokeWidthDefault, StrokeWidthAny;
+        public AndroidInflateAttribute? StrokeColorDefault, StrokeColorAny;
+        public AndroidInflateAttribute? ShapeDefault, ShapeAny;
+        public List<AndroidInflateAttribute> StateColors { get; } = new();
+    }
+
+    private static void Walk(AndroidXmlElement element, bool? nearestItemHasState, AndroidXmlAttribute? nearestItemState, DrawableBagBuilder builder)
     {
         // Track the NEAREST ancestor <item>: whether it has any state spec
         // (for default-vs-fallback priority) and its recognized state attribute
@@ -163,28 +195,34 @@ public sealed class AndroidResourceQueryService
             TryColorAttribute(element, out AndroidInflateAttribute? solidColor) &&
             solidColor is not null)
         {
-            if (currentItemState == false && solidDefault is null) solidDefault = solidColor;
-            solidAny ??= solidColor;
-            if (currentItemStateAttr is not null) stateColors.Add(NamedStateColor(solidColor, currentItemStateAttr));
+            AddBagValue(currentItemState, solidColor, ref builder.SolidDefault, ref builder.SolidAny);
+            if (currentItemStateAttr is not null) builder.StateColors.Add(NamedStateColor(solidColor, currentItemStateAttr));
         }
         // A <gradient android:startColor>: GradientDrawable without a <solid>.
-        // Exposed as "startColor" with the same default-vs-state rules.
-        else if (element.Name == "gradient" &&
-                 TryNamedAttribute(element, "startColor", out AndroidInflateAttribute? gradientColor) &&
-                 gradientColor is not null)
+        // Exposed as "startColor" with the same default-vs-state rules, plus
+        // its sibling endColor/angle/type (the full GradientDrawable config).
+        else if (element.Name == "gradient")
         {
-            if (currentItemState == false && gradientDefault is null) gradientDefault = gradientColor;
-            gradientAny ??= gradientColor;
-            if (currentItemStateAttr is not null) stateColors.Add(NamedStateColor(gradientColor, currentItemStateAttr));
+            if (TryNamedAttribute(element, "startColor", out AndroidInflateAttribute? gradientColor) && gradientColor is not null)
+            {
+                AddBagValue(currentItemState, gradientColor, ref builder.GradientStartDefault, ref builder.GradientStartAny);
+                if (currentItemStateAttr is not null) builder.StateColors.Add(NamedStateColor(gradientColor, currentItemStateAttr));
+            }
+            if (TryNamedAttribute(element, "endColor", out AndroidInflateAttribute? gradientEnd) && gradientEnd is not null)
+                AddBagValue(currentItemState, gradientEnd, ref builder.GradientEndDefault, ref builder.GradientEndAny);
+            if (TryNamedAttribute(element, "angle", out AndroidInflateAttribute? gradientAngle) && gradientAngle is not null)
+                AddBagValue(currentItemState, gradientAngle, ref builder.GradientAngleDefault, ref builder.GradientAngleAny);
+            if (TryNamedAttribute(element, "type", out AndroidInflateAttribute? gradientType) && gradientType is not null)
+                AddBagValue(currentItemState, gradientType, ref builder.GradientTypeDefault, ref builder.GradientTypeAny);
         }
         // A direct <item android:color>: the stateless item is the default.
         else if (element.Name == "item" &&
                  TryColorAttribute(element, out AndroidInflateAttribute? itemColor) &&
                  itemColor is not null)
         {
-            if (currentItemState == false && itemDefault is null) itemDefault = itemColor;
-            itemFallback ??= itemColor;
-            if (currentItemStateAttr is not null) stateColors.Add(NamedStateColor(itemColor, currentItemStateAttr));
+            if (currentItemState == false && builder.ItemDefault is null) builder.ItemDefault = itemColor;
+            builder.ItemFallback ??= itemColor;
+            if (currentItemStateAttr is not null) builder.StateColors.Add(NamedStateColor(itemColor, currentItemStateAttr));
         }
         // <corners android:radius>: rounded-corner geometry, a sibling of
         // <solid> inside <shape>. Exposed as "radius" (a raw dimension — the
@@ -194,13 +232,40 @@ public sealed class AndroidResourceQueryService
                  TryNamedAttribute(element, "radius", out AndroidInflateAttribute? cornerRadius) &&
                  cornerRadius is not null)
         {
-            if (currentItemState == false && cornersDefault is null) cornersDefault = cornerRadius;
-            cornersAny ??= cornerRadius;
-            if (currentItemStateAttr is not null) stateColors.Add(NamedStateColor(cornerRadius, currentItemStateAttr));
+            AddBagValue(currentItemState, cornerRadius, ref builder.CornersDefault, ref builder.CornersAny);
+            if (currentItemStateAttr is not null) builder.StateColors.Add(NamedStateColor(cornerRadius, currentItemStateAttr));
+        }
+        // <stroke android:width/android:color>: border geometry + paint, a
+        // sibling of <solid> inside <shape>. Exposed as "strokeWidth" (a raw
+        // dimension) and "strokeColor" (renamed so it cannot collide with the
+        // fill's "color" attr) with the same default-vs-state rules.
+        else if (element.Name == "stroke")
+        {
+            if (TryNamedAttribute(element, "width", out AndroidInflateAttribute? strokeWidth) && strokeWidth is not null)
+                AddBagValue(currentItemState, strokeWidth with { Name = "strokeWidth" }, ref builder.StrokeWidthDefault, ref builder.StrokeWidthAny);
+            if (TryColorAttribute(element, out AndroidInflateAttribute? strokeColor) && strokeColor is not null)
+                AddBagValue(currentItemState, strokeColor with { Name = "strokeColor" }, ref builder.StrokeColorDefault, ref builder.StrokeColorAny);
+        }
+        // <shape android:shape>: rectangle/oval/line/ring — the drawable's
+        // geometry. Exposed as "shape" (a raw int enum).
+        else if (element.Name == "shape" &&
+                 TryNamedAttribute(element, "shape", out AndroidInflateAttribute? shapeAttr) &&
+                 shapeAttr is not null)
+        {
+            AddBagValue(currentItemState, shapeAttr, ref builder.ShapeDefault, ref builder.ShapeAny);
         }
 
         foreach (AndroidXmlElement child in element.Children)
-            Walk(child, currentItemState, currentItemStateAttr, ref solidDefault, ref solidAny, ref itemDefault, ref itemFallback, ref gradientDefault, ref gradientAny, ref cornersDefault, ref cornersAny, stateColors);
+            Walk(child, currentItemState, currentItemStateAttr, builder);
+    }
+
+    /// <summary>Shared default-vs-state capture: the value inside a stateless
+    /// item becomes the DEFAULT candidate; the first value seen (any state)
+    /// becomes the ANY fallback. Resolution is Default ?? Any at the end.</summary>
+    private static void AddBagValue(bool? currentItemState, AndroidInflateAttribute value, ref AndroidInflateAttribute? defaultValue, ref AndroidInflateAttribute? anyValue)
+    {
+        if (currentItemState == false && defaultValue is null) defaultValue = value;
+        anyValue ??= value;
     }
 
     /// <summary>Repackages a color attribute as the selector state entry: same
