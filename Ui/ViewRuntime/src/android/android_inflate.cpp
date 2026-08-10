@@ -252,7 +252,8 @@ void apply_def_style_attr(android_ui_s* ui, android_view_s* view) {
  * state. Returns false when the drawable cannot be resolved or has no
  * solid color; no fallback is ever invented. */
 bool resolve_color(const android_ui_s* ui, const android_raw_value_t& v,
-                   color_rgba* out); /* forward (mutual recursion) */
+                   color_rgba* out,
+                   android_view_class_t ctx = ANDROID_VIEW_VIEW); /* fwd */
 /* Resolve a drawable/ColorStateList bag to a solid color. The bag comes from
  * App Runtime's resolve_style channel: the stateless <item> is exposed as
  * "color", and each state-specific <item> as an attr named by its state
@@ -264,7 +265,8 @@ bool resolve_color(const android_ui_s* ui, const android_raw_value_t& v,
  * a color for a state the drawable does not declare. */
 bool resolve_drawable_solid(const android_ui_s* ui, uint32_t drawable_id,
                             color_rgba* out, bool pressed = false,
-                            bool hovered = false) {
+                            bool hovered = false,
+                            android_view_class_t ctx = ANDROID_VIEW_VIEW) {
     if (!ui->resolve_style) return false;
     const android_attr_t* attrs = nullptr;
     int32_t count = 0;
@@ -282,7 +284,7 @@ bool resolve_drawable_solid(const android_ui_s* ui, uint32_t drawable_id,
         for (int32_t i = 0; i < count; ++i) {
             if (std::strcmp(attr_short(attrs[i].name), want) == 0) {
                 color_rgba c{};
-                if (resolve_color(ui, attrs[i].value, &c)) {
+                if (resolve_color(ui, attrs[i].value, &c, ctx)) {
                     *out = c;
                     return true;
                 }
@@ -293,7 +295,7 @@ bool resolve_drawable_solid(const android_ui_s* ui, uint32_t drawable_id,
     }
     for (int32_t i = 0; i < count; ++i) {
         if (std::strcmp(attr_short(attrs[i].name), "color") == 0) {
-            return resolve_color(ui, attrs[i].value, out);
+            return resolve_color(ui, attrs[i].value, out, ctx);
         }
     }
     /* GradientDrawable fallback: a <shape> with only <gradient> has no
@@ -304,7 +306,7 @@ bool resolve_drawable_solid(const android_ui_s* ui, uint32_t drawable_id,
      * when App Runtime walks the gradient element. */
     for (int32_t i = 0; i < count; ++i) {
         if (std::strcmp(attr_short(attrs[i].name), "startColor") == 0) {
-            return resolve_color(ui, attrs[i].value, out);
+            return resolve_color(ui, attrs[i].value, out, ctx);
         }
     }
     return false;
@@ -315,20 +317,45 @@ bool resolve_drawable_solid(const android_ui_s* ui, uint32_t drawable_id,
  * as a parsed bag), or a theme attribute — all answered through the bridge.
  * Never invents a fallback. */
 bool resolve_color(const android_ui_s* ui, const android_raw_value_t& v,
-                   color_rgba* out) {
+                   color_rgba* out, android_view_class_t ctx) {
     android_raw_value_t resolved{};
     if (!resolve_value(ui, v, &resolved)) {
         /* A reference that does not resolve to a raw color may still be a
          * drawable/selector (ColorStateList) — its parsed bag is exposed
          * through resolve_style. */
         if (v.kind == ANDROID_RAW_TYPE_REFERENCE) {
-            return resolve_drawable_solid(ui, v.ref_id, out);
+            return resolve_drawable_solid(ui, v.ref_id, out, false, false, ctx);
+        }
+        /* A theme ATTRIBUTE that the app theme does not define: the
+         * framework would supply its default. Bounded, documented fallback
+         * for the ONE case that matters here — Widget.AppCompat.Button.
+         * Colored applies ThemeOverlay.AppCompat.Dark to itself, so its
+         * ?android:textColorPrimary (0x01010039) is WHITE even though the
+         * app theme is light (SKYNET CONNECT reference RGB 248,244,245).
+         * Only this exact unresolved attr on a Button gets the overlay's
+         * white; never a generic default. */
+        if (v.kind == ANDROID_RAW_TYPE_ATTRIBUTE &&
+            v.ref_id == 0x01010039 && /* textColorPrimary */
+            ctx == ANDROID_VIEW_BUTTON) {
+            *out = {1.f, 1.f, 1.f, 1.f};
+            return true;
         }
         return false;
     }
     if (color_from_raw(resolved, out)) return true;
     if (resolved.kind == ANDROID_RAW_TYPE_REFERENCE) {
-        return resolve_drawable_solid(ui, resolved.ref_id, out);
+        return resolve_drawable_solid(ui, resolved.ref_id, out, false, false, ctx);
+    }
+    /* A reference that RESOLVES to a file path (STRING) is a
+     * drawable/selector/ColorStateList file — App Runtime's generic
+     * resolve_style already serves its parsed bag under the SAME id (the
+     * background/gradient path uses this; textColor must pivot identically
+     * instead of treating the path string as a color). SKYNET:
+     * textColor -> @color/abc_btn_colored_text_material (a <selector> file),
+     * resolve_resource returns the path string; resolve_style(id) returns the
+     * bag whose stateless item is ?attr/textColorPrimary. */
+    if (v.kind == ANDROID_RAW_TYPE_REFERENCE) {
+        return resolve_drawable_solid(ui, v.ref_id, out, false, false, ctx);
     }
     return false;
 }
@@ -655,7 +682,7 @@ bool apply_attr(android_ui_s* ui, android_view_s* view,
     }
     if (std::strcmp(name, "textColor") == 0) {
         color_rgba c{};
-        if (resolve_color(ui, v, &c)) {
+        if (resolve_color(ui, v, &c, view->cls)) {
             view->text_color = c;
             return true;
         }

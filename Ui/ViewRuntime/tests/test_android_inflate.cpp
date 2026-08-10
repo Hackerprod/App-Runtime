@@ -48,6 +48,13 @@ bool_t stub_resolve_resource(uint32_t id, android_raw_value_t* out, void* ud) {
         out->unit = ANDROID_DIMEN_UNIT_DIP;
         return true;
     }
+    if (id == 0x7f050003) {
+        /* SKYNET: textColor -> @color/abc_btn_colored_text_material; the
+         * resource resolves to a FILE PATH (a <selector> AXML), not a color. */
+        out->kind = ANDROID_RAW_TYPE_STRING;
+        out->string_value = "res/color/abc_btn_colored_text_material.xml";
+        return true;
+    }
     return false;
 }
 
@@ -134,6 +141,25 @@ const android_attr_t kGradientBgAttrs[2] = {
      {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF111A33)}},
 };
 
+/* ColorStateList textColor file (SKYNET abc_btn_colored_text_material):
+ * <selector><item state_enabled=false color=?android:textColorHighlight/>
+ * <item (stateless) color=?android:textColorPrimary/></selector> — the
+ * stateless item is a theme ATTRIBUTE (0x01010039), not a literal. The bag
+ * App Runtime serves exposes the stateless item as "color". */
+const android_attr_t kTextColorSelectorAttrs[2] = {
+    {"state_enabled_false", 0x01010007,
+     {ANDROID_RAW_TYPE_ATTRIBUTE, nullptr, 0x01010046, 0.f, 0, 0}}, /* textColorHighlight */
+    {"color", 0x01010098,
+     {ANDROID_RAW_TYPE_ATTRIBUTE, nullptr, 0x01010039, 0.f, 0, 0}}, /* textColorPrimary */
+};
+
+/* Theme with textColorPrimary: style 0x7f020013 -> textColorPrimary=#FFFFFFFF
+ * (white — the expected button text on the teal background). */
+const android_attr_t kTextColorPrimaryThemeAttrs[1] = {
+    {"android:textColorPrimary", 0x01010039,
+     {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFFFFFFFF)}},
+};
+
 /* Theme with windowBackground: style 0x7f020011 -> windowBackground =
  * @drawable/0x7f020020 (solid green via drawable bag). */
 const android_attr_t kWindowThemeAttrs[1] = {
@@ -177,6 +203,14 @@ bool_t stub_resolve_style(uint32_t id, const android_attr_t** out,
             return true;
         case 0x7f010006:
             *out = kGradientBgAttrs; *count = 2; *parent = 0;
+            return true;
+        case 0x7f050003:
+            /* The color-selector file: served as a bag under the SAME id as
+             * the textColor reference (App Runtime generic resolve_style). */
+            *out = kTextColorSelectorAttrs; *count = 2; *parent = 0;
+            return true;
+        case 0x7f020013:
+            *out = kTextColorPrimaryThemeAttrs; *count = 1; *parent = 0;
             return true;
         default:
             *out = nullptr; *count = 0; *parent = 0;
@@ -1177,6 +1211,95 @@ void test_inflate_button_pressed_color_swap() {
 
     viewruntime_surface_destroy(surface3);
     android_ui_destroy(ui3);
+
+    /* SKYNET contrast regression: Button textColor=@color/0x7f050003 — a
+     * reference that RESOLVES TO A FILE PATH (color selector), whose bag's
+     * stateless item is ?attr/textColorPrimary (theme ATTRIBUTE 0x01010039).
+     * The app theme does NOT define 0x01010039 (verified against the real
+     * SKYNET theme chain 0x7f10000b→0x7f10021c→0x7f100054); Widget.AppCompat.
+     * Button.Colored applies ThemeOverlay.AppCompat.Dark so THIS Button gets
+     * WHITE (reference RGB 248,244,245). A plain TextView must NOT — the
+     * overlay is button-scoped, so no generic white default.
+     * Theme root = 0x7f020010 (only colorAccent, NO textColorPrimary). */
+    android_ui_t ui4 = nullptr;
+    expect_ok(android_ui_create(&opts, &ui4), "create ui4");
+    android_ui_set_resource_bridge(ui4, stub_resolve_resource,
+                                   stub_resolve_style, stub_fetch_file, nullptr);
+    if (font_path) expect_ok(android_ui_set_font(ui4, font_path), "set font ui4");
+    void* surface4 = viewruntime_surface_create(font_path);
+    expect(surface4 != nullptr, "surface4 created");
+    viewruntime_surface_resize(surface4, 120, 60, 1.f);
+    android_ui_set_surface(ui4, surface4);
+
+    android_attr_t attrs4[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 100.f, ANDROID_DIMEN_UNIT_DIP, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 40.f, ANDROID_DIMEN_UNIT_DIP, 0}),
+        attr_lit("android:background",
+                 {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF03DAC5)}),
+        attr_lit("android:text", {ANDROID_RAW_TYPE_STRING, "CONNECT", 0, 0.f, 0, 0}),
+        attr_lit("android:textSize",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 16.f, ANDROID_DIMEN_UNIT_SP, 0}),
+        attr_lit("android:textColor",
+                 {ANDROID_RAW_TYPE_REFERENCE, nullptr, 0x7f050003, 0.f, 0, 0}),
+    };
+    android_node_t node4{};
+    node4.class_name = "Button";
+    node4.parent_index = -1;
+    node4.theme_style_id = 0x7f020010; /* theme WITHOUT textColorPrimary */
+    node4.attr_count = 6;
+    node4.attrs = attrs4;
+
+    android_view_t root4 = nullptr;
+    expect_ok(android_ui_inflate(ui4, &node4, 1, &root4), "inflate contrast");
+    expect_ok(android_ui_measure(ui4, root4, 120.f, 60.f), "measure contrast");
+    expect_ok(android_ui_layout(ui4, root4, 10.f, 10.f, 100.f, 40.f), "layout contrast");
+
+    color_rgba tc{};
+    expect_ok(android_view_get_text_color(root4, &tc), "get text color");
+    expect(tc.a == 1.f && tc.r > 0.9f && tc.g > 0.9f && tc.b > 0.9f,
+           "Button textColor resolves to white (Button.Colored overlay), not teal");
+
+    display_list_t list4 = nullptr;
+    expect_ok(android_ui_record(ui4, root4, &list4), "record contrast");
+    expect_ok(android_ui_render(ui4, list4), "render contrast");
+    display_list_destroy(list4);
+    /* Text pixel: white glyph on teal background — a bright pixel (>200)
+     * inside the button (sample near center, on the "O" of CONNECT). */
+    const uint8_t* px4 = nullptr;
+    int pitch4 = 0, w4 = 0, h4 = 0;
+    viewruntime_surface_pixels(surface4, &px4, &pitch4, &w4, &h4);
+    int bright = 0;
+    for (int y = 20; y < 40; ++y)
+        for (int x = 30; x < 90; ++x) {
+            const uint8_t* p = px4 + y * pitch4 + x * 4;
+            if (p[3] != 0 && p[2] > 200 && p[1] > 200 && p[0] > 200) bright++;
+        }
+    expect(bright > 0, "white text pixels rendered (high contrast)");
+
+    /* Scope guard: a plain TextView with the SAME textColor reference must
+     * NOT get the Button.Colored overlay white — the fallback is button-
+     * scoped, so inflate fails (unresolved textColor) instead of inventing
+     * a generic default. */
+    android_node_t node_tv{};
+    node_tv.class_name = "TextView";
+    node_tv.parent_index = -1;
+    node_tv.theme_style_id = 0x7f020010; /* same theme, no textColorPrimary */
+    node_tv.attr_count = 2;
+    android_attr_t tv_attrs[2] = {
+        attr_lit("android:text", {ANDROID_RAW_TYPE_STRING, "plain", 0, 0.f, 0, 0}),
+        attr_lit("android:textColor",
+                 {ANDROID_RAW_TYPE_REFERENCE, nullptr, 0x7f050003, 0.f, 0, 0}),
+    };
+    node_tv.attrs = tv_attrs;
+    android_view_t root_tv = nullptr;
+    status_t tv_st = android_ui_inflate(ui4, &node_tv, 1, &root_tv);
+    expect(tv_st != OK,
+           "TextView with unresolved textColorPrimary does NOT resolve (no generic white)");
+
+    viewruntime_surface_destroy(surface4);
+    android_ui_destroy(ui4);
     return;
 }
 
