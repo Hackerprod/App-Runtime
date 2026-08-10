@@ -65,6 +65,31 @@ static float stb_line_width(stbtt_fontinfo* font, const char* text, float scale)
     return width;
 }
 
+/* Width of the text range [start, end) — AOSP Layout.getDesiredWidth(source,
+ * start, end) measures a BOUNDED range (Layout.java:250); the wrap pass must
+ * not measure from word_start to the end of the whole string (which would
+ * count every following word and inflate the width). */
+static float stb_range_width(stbtt_fontinfo* font, const char* start,
+                             const char* end, float scale) {
+    float width = 0.f;
+    int previous = 0;
+    const char* p = start;
+    while (p < end) {
+        unsigned int cp = 0;
+        const int n = utf8_decode(p, &cp);
+        if (n == 0) break;
+        p += n;
+        int advance = 0, lsb = 0;
+        stbtt_GetCodepointHMetrics(font, static_cast<int>(cp), &advance, &lsb);
+        if (previous != 0) {
+            width += stbtt_GetCodepointKernAdvance(font, previous, static_cast<int>(cp)) * scale;
+        }
+        width += static_cast<float>(advance) * scale;
+        previous = static_cast<int>(cp);
+    }
+    return width;
+}
+
 android_text_metrics_t stb_text_measurer(const char* text, float size_px,
                                          float max_width, void* user_data) {
     android_ui_s* ui = static_cast<android_ui_s*>(user_data);
@@ -95,8 +120,9 @@ android_text_metrics_t stb_text_measurer(const char* text, float size_px,
         if (n == 0) break;
         const char* next = text + n;
         if (cp == ' ' || cp == '\t' || cp == '\n') {
-            /* measure the word [word_start, text) */
-            const float word_w = stb_line_width(font, word_start, scale);
+            /* measure the word [word_start, text) — bounded, AOSP
+             * getDesiredWidth(start,end); never to end-of-string. */
+            const float word_w = stb_range_width(font, word_start, text, scale);
             if (line_width + word_w > max_width && line_width > 0.f) {
                 ++lines;
                 line_width = word_w;
@@ -123,7 +149,7 @@ android_text_metrics_t stb_text_measurer(const char* text, float size_px,
         text = next;
     }
     /* last word */
-    const float last_w = stb_line_width(font, word_start, scale);
+    const float last_w = stb_range_width(font, word_start, text, scale);
     if (line_width + last_w > max_width && line_width > 0.f) {
         ++lines;
         line_width = last_w;

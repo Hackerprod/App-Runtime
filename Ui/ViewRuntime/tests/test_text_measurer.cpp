@@ -53,6 +53,23 @@ static void test_font_measures() {
     EXPECT(wrapped.height > m10.height); /* at least two lines */
     EXPECT(wrapped.width <= m10.width * 0.5f + 0.5f);
 
+    /* Regression: a single word in the MIDDLE of a longer text must measure
+     * only that word, not to the end of the whole string. Before the fix,
+     * stb_line_width(word_start) ran to end-of-string: with a wide max the
+     * first word "absorbed" every following word, inflating the width many
+     * times over (RuntimeApiLab description: "Ejecuta" measured 295px at 13sp
+     * instead of ~35px; total 1707px for 53 chars). */
+    android_text_metrics_t wide{};
+    android_ui_measure_text(ui,
+        "Ejecuta 4 pings a google.com y calcula la latencia media.",
+        13.f, 99999.f, &wide);
+    /* 53 chars at ~7px/char ≈ 370px; any value > 3x that is the old bug. */
+    EXPECT(wide.width > 100.f && wide.width < 1100.f);
+    /* ~53 chars / 7px: the first word alone must be far below the total. */
+    android_text_metrics_t first{};
+    android_ui_measure_text(ui, "Ejecuta", 13.f, 99999.f, &first);
+    EXPECT(first.width < wide.width * 0.5f);
+
     android_ui_destroy(ui);
 }
 
