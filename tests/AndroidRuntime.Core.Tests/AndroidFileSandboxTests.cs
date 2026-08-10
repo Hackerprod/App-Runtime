@@ -114,6 +114,58 @@ public sealed class AndroidFileSandboxTests
         Assert.Equal(Path.Combine((string)cache.InstanceFields[FilePathField], "sub/recording.m4a"), (string)recording.InstanceFields[FilePathField]);
     }
 
+    [Fact]
+    public void FileWriter_ctor_write_close_creates_a_real_file_with_content()
+    {
+        using var sandbox = new TempFileSandbox();
+        using var state = new AndroidFrameworkState("files", "org.example.app", Owner, new ActivityWindowPeers(),
+            capabilityPolicy: AndroidCapabilityPolicy.DenyAll, fileSandbox: sandbox);
+        var registry = AndroidApiBindings.CreateBuilder(state, new QuietLog()).Build();
+        var session = new AndroidApiSessionContext(state.SessionId, state.PackageName, state.ActivityDescriptor, CancellationToken.None, () => true);
+
+        // Context.getExternalFilesDir -> File(dir, name) -> FileWriter(file, false).
+        DexObject dir = InvokeContext(state, "getExternalFilesDir", "(Ljava/lang/String;)Ljava/io/File;", state.ApplicationContext, null!);
+        var target = new DexObject("Ljava/io/File;");
+        Invoke(registry, session, "Ljava/io/File;", "<init>", "(Ljava/io/File;Ljava/lang/String;)V", AndroidInvokeKind.Direct, target, dir, "fileImplementation.txt");
+        var writer = new DexObject("Ljava/io/FileWriter;");
+        Invoke(registry, session, "Ljava/io/FileWriter;", "<init>", "(Ljava/io/File;Z)V", AndroidInvokeKind.Direct, writer, target, 0);
+        Invoke(registry, session, "Ljava/io/FileWriter;", "write", "(Ljava/lang/String;)V", AndroidInvokeKind.Virtual, writer, "Esta es la prueba de filestoraje.");
+        Invoke(registry, session, "Ljava/io/FileWriter;", "close", "()V", AndroidInvokeKind.Virtual, writer);
+
+        string path = (string)target.InstanceFields[FilePathField];
+        Assert.True(File.Exists(path), "the file must exist on disk after the write cycle");
+        Assert.Equal("Esta es la prueba de filestoraje.", File.ReadAllText(path));
+        // DenyAll still serves app-private writes: no capability gate applies.
+    }
+
+    [Fact]
+    public void FileWriter_append_true_keeps_existing_content()
+    {
+        using var sandbox = new TempFileSandbox();
+        using var state = new AndroidFrameworkState("files", "org.example.app", Owner, new ActivityWindowPeers(), fileSandbox: sandbox);
+        var registry = AndroidApiBindings.CreateBuilder(state, new QuietLog()).Build();
+        var session = new AndroidApiSessionContext(state.SessionId, state.PackageName, state.ActivityDescriptor, CancellationToken.None, () => true);
+
+        DexObject dir = InvokeContext(state, "getExternalFilesDir", "(Ljava/lang/String;)Ljava/io/File;", state.ApplicationContext, null!);
+        var target = new DexObject("Ljava/io/File;");
+        Invoke(registry, session, "Ljava/io/File;", "<init>", "(Ljava/io/File;Ljava/lang/String;)V", AndroidInvokeKind.Direct, target, dir, "append.txt");
+        string path = (string)target.InstanceFields[FilePathField];
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "first");
+
+        var writer = new DexObject("Ljava/io/FileWriter;");
+        Invoke(registry, session, "Ljava/io/FileWriter;", "<init>", "(Ljava/io/File;Z)V", AndroidInvokeKind.Direct, writer, target, 1);
+        Invoke(registry, session, "Ljava/io/FileWriter;", "write", "(Ljava/lang/String;)V", AndroidInvokeKind.Virtual, writer, "second");
+
+        Assert.Equal("firstsecond", File.ReadAllText(path));
+    }
+
+    private static void Invoke(AndroidApiRegistry registry, AndroidApiSessionContext session, string owner, string name, string descriptor, AndroidInvokeKind kind, params object[] args)
+    {
+        var api = new AndroidApiMethodId(owner, name, descriptor);
+        registry.Invoke(session, new AndroidApiCallSite(Owner + "->test()V", 0, api, api, kind), args);
+    }
+
     private static DexObject InvokeContext(AndroidFrameworkState state, string name, string descriptor, params object[] args)
     {
         var registry = AndroidApiBindings.CreateBuilder(state, new QuietLog()).Build();

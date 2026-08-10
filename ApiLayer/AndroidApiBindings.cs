@@ -36,6 +36,7 @@ public static class AndroidApiBindings
 		JavaLangThreadBindings.Register(builder, state);
 		JavaLangStringBindings.Register(builder, state);
 		JavaLangReflectBindings.Register(builder, state);
+		JavaIoFileWriterBindings.Register(builder, state);
 		JavaLangBoxingBindings.Register(builder, state);
 		KotlinTextStringsKtBindings.Register(builder, state);
 		KotlinLazyBindings.Register(builder, state);
