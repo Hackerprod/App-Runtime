@@ -244,6 +244,23 @@ public sealed class AndroidFrameworkState : IDisposable
         try { CapabilityAudit.Record(new(WallClock.NowMillis(), request.SessionId, request.PackageName, request.Capability, request.Operation, allowed)); } catch { }
         return allowed;
     }
+
+    /// <summary>Context.checkSelfPermission(String) semantics: a pure QUERY
+    /// that never throws. Maps the real Android permission string to its
+    /// capability, consults the policy through the SAME audit funnel as every
+    /// other capability attempt, and returns PERMISSION_GRANTED (0) or
+    /// PERMISSION_DENIED (-1). Unknown permission strings are DENIED (real
+    /// Android denies permissions it does not model; the query does not throw).
+    /// Manifest declaration is answered separately by PackageManager.
+    /// checkPermission — the runtime GRANT state is what this answers.</summary>
+    public int CheckSelfPermission(string permission)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(permission);
+        if (!AndroidCapabilityInfo.TryFromAndroidPermission(permission, out AndroidCapability capability))
+            return -1;
+        bool allowed = IsCapabilityAllowed(new(SessionId, PackageName, capability, "checkSelfPermission"));
+        return allowed ? 0 : -1;
+    }
     public AndroidPeerCounts PeerCounts => new(StringBuilders.Count, Bundles.Count, Intents.Count, Toasts.Count);
     internal bool IsFinishing => Volatile.Read(ref _finishing) != 0;
     internal bool IsDestroyed => Volatile.Read(ref _destroyed) != 0;

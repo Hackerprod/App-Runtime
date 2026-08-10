@@ -105,7 +105,7 @@ Alongside the ConcurrentHashMap work above, this batch also fixed real DEX-inter
 ## Windows CLI
 
 ```powershell
-AndroidRuntime.WindowsHost.exe <apk> [--auto-close-ms <100..600000>] [--trace <path>] [--capture-frame <path.bmp>] [--capability-audit <path>] [--grant-clipboard-read] [--grant-clipboard-write] [--grant-network-state] [--grant-power]
+AndroidRuntime.WindowsHost.exe <apk> [--auto-close-ms <100..600000>] [--trace <path>] [--capture-frame <path.bmp>] [--capability-audit <path>] [--grant-clipboard-read] [--grant-clipboard-write] [--grant-network-state] [--grant-power] [--grant-file-read] [--grant-file-write] [--grant-bluetooth-scan] [--grant-bluetooth-connect] [--grant-camera] [--grant-network-connect] [--grant-location-coarse] [--grant-location-fine] [--grant-microphone]
 ```
 
 - Missing/invalid arguments return exit code `2`.
@@ -116,6 +116,7 @@ AndroidRuntime.WindowsHost.exe <apk> [--auto-close-ms <100..600000>] [--trace <p
 - Trace output is normalized with Windows case-insensitive path semantics and rejected before launch when it aliases the input APK.
 - `--capability-audit <path>` records one structured JSON-lines entry per capability attempt (session, package, capability, operation, timestamp, ALLOWED/DENIED). Unlike the invocation trace — which the host only writes after a clean close — the audit sink flushes every record to disk immediately, so a crash right after a denied capability still leaves the attempt inspectable. The trace and audit output paths must not alias each other or the input APK.
 - Clipboard read, clipboard write, and network-state capabilities default to deny and require their separate explicit grant flags. Duplicate or unknown grants are usage errors.
+- Every capability from the modular taxonomy has its own `--grant-*` flag (`--grant-file-read`, `--grant-file-write`, `--grant-bluetooth-scan`, `--grant-bluetooth-connect`, `--grant-camera`, `--grant-network-connect`, `--grant-location-coarse`, `--grant-location-fine`, `--grant-microphone`). Runtime permission QUERIES (`Context.checkSelfPermission`) consult the same capability policy through the audit funnel and return `PERMISSION_GRANTED` (0) / `PERMISSION_DENIED` (-1) — a pure query, never an exception.
 - Connectivity additionally requires a direct manifest `android.permission.ACCESS_NETWORK_STATE` declaration. Unknown services and unavailable adapters return null; a denied lookup/operation throws a catchable guest `SecurityException`.
 
 Run the checked smoke harness after building:

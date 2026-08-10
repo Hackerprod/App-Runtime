@@ -83,6 +83,17 @@ public static class AndroidApiBindings
 			RequireContext(state, Receiver(args));
 			return state.ApplicationContext;
 		});
+		// Context.checkSelfPermission(String) -> int: a pure permission QUERY
+		// (never throws — returns PERMISSION_GRANTED 0 / PERMISSION_DENIED -1).
+		// Maps the Android permission string to its capability and consults the
+		// policy through the audit funnel, exactly like every other capability
+		// attempt (the difference: no SecurityException is ever raised).
+		builder.Register(Api("Landroid/content/Context;", "checkSelfPermission", "(Ljava/lang/String;)I"), delegate(AndroidApiInvocation _, object[] args)
+		{
+			RequireContext(state, Receiver(args));
+			string permission = args[1] as string ?? string.Empty;
+			return state.CheckSelfPermission(permission);
+		});
 		// ComponentActivity/Activity.getApplication() -> the session Application.
 		builder.Register(Api("Landroid/app/Activity;", "getApplication", "()Landroid/app/Application;"), delegate(AndroidApiInvocation invocation, object[] args)
 		{

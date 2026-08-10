@@ -26,6 +26,29 @@ public static class AndroidCapabilityInfo
         AndroidCapability.Microphone => "android.permission.RECORD_AUDIO",
         _ => null
     };
+
+    /// <summary>Reverse mapping used by runtime permission QUERIES (e.g.
+    /// Context.checkSelfPermission): a real Android permission string to the
+    /// capability it gates. Unknown permission strings return false — real
+    /// Android answers DENIED for permissions it does not model, and the query
+    /// contract never throws.</summary>
+    public static bool TryFromAndroidPermission(string permission, out AndroidCapability capability)
+    {
+        switch (permission)
+        {
+            case "android.permission.ACCESS_NETWORK_STATE": capability = AndroidCapability.NetworkState; return true;
+            case "android.permission.READ_EXTERNAL_STORAGE": capability = AndroidCapability.FileRead; return true;
+            case "android.permission.WRITE_EXTERNAL_STORAGE": capability = AndroidCapability.FileWrite; return true;
+            case "android.permission.BLUETOOTH_SCAN": capability = AndroidCapability.BluetoothScan; return true;
+            case "android.permission.BLUETOOTH_CONNECT": capability = AndroidCapability.BluetoothConnect; return true;
+            case "android.permission.CAMERA": capability = AndroidCapability.Camera; return true;
+            case "android.permission.INTERNET": capability = AndroidCapability.NetworkConnect; return true;
+            case "android.permission.ACCESS_COARSE_LOCATION": capability = AndroidCapability.LocationCoarse; return true;
+            case "android.permission.ACCESS_FINE_LOCATION": capability = AndroidCapability.LocationFine; return true;
+            case "android.permission.RECORD_AUDIO": capability = AndroidCapability.Microphone; return true;
+            default: capability = default; return false;
+        }
+    }
 }
 
 /// <summary>One structured capability-attempt record, produced for EVERY

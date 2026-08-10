@@ -76,6 +76,51 @@ public sealed class AndroidCapabilityAuditTests
     public void Host_only_capabilities_have_no_direct_permission(AndroidCapability capability)
         => Assert.Null(AndroidCapabilityInfo.ToAndroidPermission(capability));
 
+    [Theory]
+    [InlineData("android.permission.BLUETOOTH_CONNECT", AndroidCapability.BluetoothConnect)]
+    [InlineData("android.permission.BLUETOOTH_SCAN", AndroidCapability.BluetoothScan)]
+    [InlineData("android.permission.RECORD_AUDIO", AndroidCapability.Microphone)]
+    [InlineData("android.permission.CAMERA", AndroidCapability.Camera)]
+    [InlineData("android.permission.INTERNET", AndroidCapability.NetworkConnect)]
+    [InlineData("android.permission.ACCESS_FINE_LOCATION", AndroidCapability.LocationFine)]
+    [InlineData("android.permission.READ_EXTERNAL_STORAGE", AndroidCapability.FileRead)]
+    public void Permission_strings_map_to_their_capabilities(string permission, AndroidCapability expected)
+    {
+        Assert.True(AndroidCapabilityInfo.TryFromAndroidPermission(permission, out AndroidCapability actual));
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("android.permission.UNKNOWN_THING")]
+    [InlineData("")]
+    [InlineData("not.a.permission")]
+    public void Unknown_permission_strings_do_not_map(string permission)
+        => Assert.False(AndroidCapabilityInfo.TryFromAndroidPermission(permission, out _));
+
+    [Fact]
+    public void Check_self_permission_is_a_query_never_throws_and_audits()
+    {
+        var audit = new CapturingAudit();
+        using var state = new AndroidFrameworkState("audit", "org.example", Owner, new ActivityWindowPeers(),
+            capabilityPolicy: new AndroidCapabilityPolicy([AndroidCapability.BluetoothConnect, AndroidCapability.Microphone]),
+            capabilityAudit: audit);
+
+        // Granted when the mapped capability is allowed by the policy.
+        Assert.Equal(0, state.CheckSelfPermission("android.permission.BLUETOOTH_CONNECT"));
+        Assert.Equal(0, state.CheckSelfPermission("android.permission.RECORD_AUDIO"));
+        // Denied when the capability is not granted.
+        Assert.Equal(-1, state.CheckSelfPermission("android.permission.BLUETOOTH_SCAN"));
+        Assert.Equal(-1, state.CheckSelfPermission("android.permission.CAMERA"));
+        // Unknown permission: DENIED, never an exception (query contract).
+        Assert.Equal(-1, state.CheckSelfPermission("android.permission.DOES_NOT_EXIST"));
+
+        // Every mapped query flowed through the audit funnel; the unmapped
+        // permission never reaches the funnel (no capability to record).
+        Assert.Contains(audit.Entries, entry => entry.Capability == AndroidCapability.BluetoothConnect && entry.Allowed && entry.Operation == "checkSelfPermission");
+        Assert.Contains(audit.Entries, entry => entry.Capability == AndroidCapability.Camera && !entry.Allowed && entry.Operation == "checkSelfPermission");
+        Assert.Equal(4, audit.Entries.Count);
+    }
+
     [Fact]
     public void Module_registry_covers_full_taxonomy_exactly_once()
     {

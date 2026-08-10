@@ -95,7 +95,7 @@ public static class Program
     private static HostOptions Parse(string[] args)
     {
         if (args.Length == 0)
-            throw new ArgumentException("Usage: AndroidRuntime.WindowsHost <apk> [--auto-close-ms <100..600000>] [--trace <path>] [--capture-frame <path.bmp>] [--capability-audit <path>] [--grant-clipboard-read] [--grant-clipboard-write] [--grant-network-state] [--grant-power]");
+            throw new ArgumentException("Usage: AndroidRuntime.WindowsHost <apk> [--auto-close-ms <100..600000>] [--trace <path>] [--capture-frame <path.bmp>] [--capability-audit <path>] [--grant-clipboard-read] [--grant-clipboard-write] [--grant-network-state] [--grant-power] [--grant-file-read] [--grant-file-write] [--grant-bluetooth-scan] [--grant-bluetooth-connect] [--grant-camera] [--grant-network-connect] [--grant-location-coarse] [--grant-location-fine] [--grant-microphone]");
         string apkPath = Path.GetFullPath(args[0]);
         if (!File.Exists(apkPath) || !string.Equals(Path.GetExtension(apkPath), ".apk", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("APK path does not exist or is not an .apk file: " + apkPath);
@@ -129,7 +129,23 @@ public static class Program
                 capabilityAuditPath = Path.GetFullPath(args[++index]);
                 continue;
             }
-            AndroidCapability? grant = args[index] switch { "--grant-clipboard-read" => AndroidCapability.ClipboardRead, "--grant-clipboard-write" => AndroidCapability.ClipboardWrite, "--grant-network-state" => AndroidCapability.NetworkState, "--grant-power" => AndroidCapability.PowerRead, _ => null };
+            AndroidCapability? grant = args[index] switch
+            {
+                "--grant-clipboard-read" => AndroidCapability.ClipboardRead,
+                "--grant-clipboard-write" => AndroidCapability.ClipboardWrite,
+                "--grant-network-state" => AndroidCapability.NetworkState,
+                "--grant-power" => AndroidCapability.PowerRead,
+                "--grant-file-read" => AndroidCapability.FileRead,
+                "--grant-file-write" => AndroidCapability.FileWrite,
+                "--grant-bluetooth-scan" => AndroidCapability.BluetoothScan,
+                "--grant-bluetooth-connect" => AndroidCapability.BluetoothConnect,
+                "--grant-camera" => AndroidCapability.Camera,
+                "--grant-network-connect" => AndroidCapability.NetworkConnect,
+                "--grant-location-coarse" => AndroidCapability.LocationCoarse,
+                "--grant-location-fine" => AndroidCapability.LocationFine,
+                "--grant-microphone" => AndroidCapability.Microphone,
+                _ => null
+            };
             if (grant.HasValue)
             {
                 if (!grants.Add(grant.Value)) throw new ArgumentException("Duplicate host grant: " + args[index]);
