@@ -92,6 +92,19 @@ const android_attr_t kDrawableAttrs[1] = {
      {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF00FF00)}},
 };
 
+/* Drawables resolved as bags (App Runtime parses the AXML drawable and
+ * exposes it as the same raw attribute bag as a style):
+ *   0x7f010003 shape: <solid android:color="#FF008577"/> (teal)
+ *   0x7f010004 selector: default item android:color="#FF03DAC5" (accent) */
+const android_attr_t kShapeBagAttrs[1] = {
+    {"android:color", 0x01010098,
+     {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF008577)}},
+};
+const android_attr_t kSelectorBagAttrs[1] = {
+    {"android:color", 0x01010098,
+     {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF03DAC5)}},
+};
+
 /* Theme with windowBackground: style 0x7f020011 -> windowBackground =
  * @drawable/0x7f020020 (solid green via drawable bag). */
 const android_attr_t kWindowThemeAttrs[1] = {
@@ -120,6 +133,12 @@ bool_t stub_resolve_style(uint32_t id, const android_attr_t** out,
             return true;
         case 0x7f020020:
             *out = kDrawableAttrs; *count = 1; *parent = 0;
+            return true;
+        case 0x7f010003:
+            *out = kShapeBagAttrs; *count = 1; *parent = 0;
+            return true;
+        case 0x7f010004:
+            *out = kSelectorBagAttrs; *count = 1; *parent = 0;
             return true;
         default:
             *out = nullptr; *count = 0; *parent = 0;
@@ -554,6 +573,58 @@ void test_inflate_ltr_relative_gravity_and_margin() {
     android_ui_destroy(ui);
 }
 
+/* Drawable via resolve_style bag: a background="@drawable/..." resolves by
+ * App Runtime exposing the PARSED drawable (shape/selector) as the same raw
+ * attribute bag as a style — ViewRuntime takes android:color, never parses
+ * bytes (separation of responsibilities: format parsing is App Runtime's). */
+void test_inflate_drawable_bag_and_color_selector() {
+    android_ui_options_t opts{};
+    opts.density = 1.f;
+    opts.scaled_density = 1.f;
+    android_ui_t ui = nullptr;
+    expect_ok(android_ui_create(&opts, &ui), "create ui");
+    android_ui_set_resource_bridge(ui, stub_resolve_resource,
+                                   stub_resolve_style, stub_fetch_file, nullptr);
+
+    android_attr_t root_attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_STRING, "match_parent", 0, 0.f, 0, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_STRING, "wrap_content", 0, 0.f, 0, 0}),
+    };
+    /* Button: background=@drawable/0x7f010003 (shape bag, teal), and
+     * textColor=@drawable/0x7f010004 (color selector bag, accent). */
+    android_attr_t button_attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_STRING, "wrap_content", 0, 0.f, 0, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_STRING, "wrap_content", 0, 0.f, 0, 0}),
+        attr_lit("android:background",
+                 {ANDROID_RAW_TYPE_REFERENCE, nullptr, 0x7f010003, 0.f, 0, 0}),
+        attr_lit("android:textColor",
+                 {ANDROID_RAW_TYPE_REFERENCE, nullptr, 0x7f010004, 0.f, 0, 0}),
+    };
+    android_node_t nodes[] = {
+        {"LinearLayout", 0, -1, 0, 2, root_attrs},
+        {"Button", 0x7f0f0001, 0, 0, 4, button_attrs},
+    };
+    android_view_t root = nullptr;
+    expect_ok(android_ui_inflate(ui, nodes, 2, &root), "inflate");
+
+    android_view_t btn = android_ui_find_view_by_id(ui, 0x7f0f0001);
+    expect(btn != nullptr, "find Button");
+    color_rgba bg{};
+    expect_ok(android_view_get_background_color(btn, &bg), "get bg");
+    expect(bg.a == 1.f && bg.g > 0.5f && bg.b > 0.4f && bg.r == 0.f,
+           "shape drawable background teal (#FF008577)");
+    color_rgba tc{};
+    expect_ok(android_view_get_text_color(btn, &tc), "get text color");
+    expect(tc.r < 0.05f && tc.g > 0.8f && tc.b > 0.7f && tc.a == 1.f,
+           "color selector textColor accent (#FF03DAC5)");
+
+    android_ui_destroy(ui);
+}
+
 } // namespace
 
 int main() {
@@ -564,6 +635,7 @@ int main() {
     test_inflate_drawable_and_window_background();
     test_inflate_image_decode_pipeline();
     test_inflate_ltr_relative_gravity_and_margin();
+    test_inflate_drawable_bag_and_color_selector();
     if (g_failures != 0) {
         std::fprintf(stderr, "%d FAILURES\n", g_failures);
         return 1;

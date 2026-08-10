@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -198,21 +199,23 @@ void apply_style_chain(android_ui_s* ui, android_view_s* view,
     apply_style_bag(ui, view, attrs, count);
 }
 
-/* Resolve a raw value that should be a color: a literal color, a resource
- * reference, or a theme attribute — all answered through the bridge. Never
- * invents a fallback. */
-bool resolve_color(const android_ui_s* ui, const android_raw_value_t& v,
-                   color_rgba* out) {
-    android_raw_value_t resolved{};
-    if (!resolve_value(ui, v, &resolved)) return false;
-    return color_from_raw(resolved, out);
-}
+/* ── Drawables ────────────────────────────────────────────────────────
+ *
+ * A drawable (shape/selector XML) is structurally a bag of attributes with
+ * android:color — exactly the shape a style bag already uses. App Runtime
+ * owns AXML format parsing (it already parses layout XML with its real
+ * reader) and exposes the parsed drawable as the same raw attribute bag
+ * through resolve_style. ViewRuntime never parses bytes: it asks for the
+ * bag and takes the solid/default color. fetch_file stays reserved for
+ * image/font files (decoded by stb_image), never for XML parsing. */
 
-/* Solid-fill shape drawable / ColorStateList: AOSP inflates a drawable XML
- * into a Drawable and its "color" attribute (solid fill) is what paints. A
- * drawable bag is structurally a style bag, so we walk it with the same
- * resolve_style callback and take android:color (ColorStateList default or
- * the shape's solid color). Returns false when no solid color is present. */
+/* Solid-fill shape drawable / ColorStateList: ask App Runtime for the
+ * drawable's parsed attribute bag (the drawable as data) and take
+ * android:color — the shape's solid fill or the ColorStateList default
+ * state. Returns false when the drawable cannot be resolved or has no
+ * solid color; no fallback is ever invented. */
+bool resolve_color(const android_ui_s* ui, const android_raw_value_t& v,
+                   color_rgba* out); /* forward (mutual recursion) */
 bool resolve_drawable_solid(const android_ui_s* ui, uint32_t drawable_id,
                             color_rgba* out) {
     if (!ui->resolve_style) return false;
@@ -227,6 +230,29 @@ bool resolve_drawable_solid(const android_ui_s* ui, uint32_t drawable_id,
         if (std::strcmp(attr_short(attrs[i].name), "color") == 0) {
             return resolve_color(ui, attrs[i].value, out);
         }
+    }
+    return false;
+}
+
+/* Resolve a raw value that should be a color: a literal color, a resource
+ * reference (a plain color, or a drawable/selector exposed by App Runtime
+ * as a parsed bag), or a theme attribute — all answered through the bridge.
+ * Never invents a fallback. */
+bool resolve_color(const android_ui_s* ui, const android_raw_value_t& v,
+                   color_rgba* out) {
+    android_raw_value_t resolved{};
+    if (!resolve_value(ui, v, &resolved)) {
+        /* A reference that does not resolve to a raw color may still be a
+         * drawable/selector (ColorStateList) — its parsed bag is exposed
+         * through resolve_style. */
+        if (v.kind == ANDROID_RAW_TYPE_REFERENCE) {
+            return resolve_drawable_solid(ui, v.ref_id, out);
+        }
+        return false;
+    }
+    if (color_from_raw(resolved, out)) return true;
+    if (resolved.kind == ANDROID_RAW_TYPE_REFERENCE) {
+        return resolve_drawable_solid(ui, resolved.ref_id, out);
     }
     return false;
 }
