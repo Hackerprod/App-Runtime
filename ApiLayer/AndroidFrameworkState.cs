@@ -130,7 +130,8 @@ public sealed class AndroidFrameworkState : IDisposable
         AndroidResourceQueryService? resourceQueries = null,
         IAndroidViewBridge? viewBridge = null,
         IAndroidCapabilityAuditSink? capabilityAudit = null,
-        IAndroidFileSandbox? fileSandbox = null)
+        IAndroidFileSandbox? fileSandbox = null,
+        IAndroidAudioRecorder? audioRecorder = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         SessionId = sessionId;
@@ -149,6 +150,7 @@ public sealed class AndroidFrameworkState : IDisposable
         CapabilityPolicy = capabilityPolicy ?? AndroidCapabilityPolicy.DenyAll;
         CapabilityAudit = capabilityAudit ?? new NullAndroidCapabilityAuditSink();
         FileSandbox = fileSandbox ?? new LocalAppDataFileSandbox();
+        AudioRecorder = audioRecorder ?? new UnavailableAndroidAudioRecorder();
         Clipboard = clipboard ?? new UnavailableAndroidClipboard();
         Connectivity = connectivity ?? new UnavailableAndroidConnectivity();
         ServiceAudit = serviceAudit ?? new NullAndroidServiceAuditSink();
@@ -210,6 +212,7 @@ public sealed class AndroidFrameworkState : IDisposable
     internal IAndroidCapabilityPolicy CapabilityPolicy { get; }
     internal IAndroidCapabilityAuditSink CapabilityAudit { get; }
     internal IAndroidFileSandbox FileSandbox { get; }
+    internal IAndroidAudioRecorder AudioRecorder { get; }
     internal IAndroidClipboard Clipboard { get; }
     internal IAndroidConnectivity Connectivity { get; }
     internal IAndroidServiceAuditSink ServiceAudit { get; }

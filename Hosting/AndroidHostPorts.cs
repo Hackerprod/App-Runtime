@@ -200,6 +200,32 @@ public interface IAndroidFileSandbox
     string GetFilesDirectory(string packageName, string? type);
 }
 
+/// <summary>Real audio capture port (MediaRecorder backing): captures the host
+/// microphone and encodes to AAC in an MP4 container at the requested sample
+/// rate/bitrate — the project owner's approved scope (real apps like WhatsApp
+/// need real audio, an empty stub is not acceptable). The host provides the
+/// implementation; Core never fabricates audio. The Microphone capability gates
+/// start() (real Android checks RECORD_AUDIO at start, not construction).</summary>
+public interface IAndroidAudioRecorder
+{
+    /// <summary>Starts real microphone capture into outputPath (AAC/MP4).
+    /// Throws when the microphone is unavailable or encoding cannot start.</summary>
+    void Start(string outputPath, int sampleRate, int bitRate);
+
+    /// <summary>Stops capture and finalizes the output file. No-op when not
+    /// recording.</summary>
+    void Stop();
+}
+
+/// <summary>Fail-closed default: no audio backend attached — start throws
+/// (never a fabricated silent file).</summary>
+public sealed class UnavailableAndroidAudioRecorder : IAndroidAudioRecorder
+{
+    public void Start(string outputPath, int sampleRate, int bitRate) =>
+        throw new InvalidOperationException("Audio recorder backend is unavailable.");
+    public void Stop() { }
+}
+
 /// <summary>Default sandbox: %LOCALAPPDATA%\AndroidRuntime\&lt;package&gt;\cache
 /// (Context.getCacheDir) and ...\files[/&lt;type&gt;] (Context.getExternalFilesDir),
 /// mirroring Android/data/&lt;package&gt;/... layout. Directories are created on
@@ -290,7 +316,8 @@ public sealed class AndroidRuntimeServices
         IAndroidPower? power = null,
         Func<AndroidResourceResolver, AndroidResourceQueryService, int, IAndroidViewBridge?>? viewBridgeFactory = null,
         IAndroidCapabilityAuditSink? capabilityAudit = null,
-        IAndroidFileSandbox? fileSandbox = null)
+        IAndroidFileSandbox? fileSandbox = null,
+        IAndroidAudioRecorder? audioRecorder = null)
     {
         WindowFactory = windowFactory ?? throw new ArgumentNullException(nameof(windowFactory));
         LogSink = logSink ?? throw new ArgumentNullException(nameof(logSink));
@@ -315,6 +342,7 @@ public sealed class AndroidRuntimeServices
         ViewBridgeFactory = viewBridgeFactory;
         CapabilityAudit = capabilityAudit ?? new NullAndroidCapabilityAuditSink();
         FileSandbox = fileSandbox ?? new LocalAppDataFileSandbox();
+        AudioRecorder = audioRecorder ?? new UnavailableAndroidAudioRecorder();
     }
 
     public IActivityWindowFactory WindowFactory { get; }
@@ -349,6 +377,10 @@ public sealed class AndroidRuntimeServices
     /// <summary>App-private file sandbox backing Context.getCacheDir /
     /// getExternalFilesDir (scoped-storage semantics: ungated).</summary>
     public IAndroidFileSandbox FileSandbox { get; }
+
+    /// <summary>Real audio capture backing MediaRecorder (AAC/MP4 from the host
+    /// microphone). Defaults to the fail-closed unavailable backend.</summary>
+    public IAndroidAudioRecorder AudioRecorder { get; }
 
     public static AndroidRuntimeServices CreateHeadless() =>
         new(new InMemoryActivityWindowFactory(), new ConsoleAndroidLogSink());

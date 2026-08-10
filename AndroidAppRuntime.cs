@@ -124,7 +124,8 @@ public sealed class AndroidAppRuntime
                     resourceQueries,
                     services.ViewBridgeFactory is null || resources is null ? null : services.ViewBridgeFactory(resources, resourceQueries!, manifest.ApplicationThemeStyleId),
                     services.CapabilityAudit,
-                    services.FileSandbox);
+                    services.FileSandbox,
+                    services.AudioRecorder);
                 var registry = AndroidApiBindings.CreateBuilder(frameworkState, services.LogSink).Build();
                 var interpreter = new DexInterpreter(dexSet, registry, apiSession: apiContext, gil: lane.Gil);
                 interpreter.StaticFieldMissDiagnostic = message => Console.Error.WriteLine("[DEX] " + message);
@@ -207,7 +208,8 @@ public sealed class AndroidAppRuntime
             resourceQueries,
             services.ViewBridgeFactory is null || resources is null ? null : services.ViewBridgeFactory(resources, resourceQueries!, manifest.ApplicationThemeStyleId),
             services.CapabilityAudit,
-                    services.FileSandbox);
+                    services.FileSandbox,
+                    services.AudioRecorder);
         var registry = AndroidApiBindings.CreateBuilder(frameworkState, services.LogSink).Build();
         var interpreter = new DexInterpreter(dexSet, registry, apiSession: apiContext);
         interpreter.StaticFieldMissDiagnostic = message => Console.Error.WriteLine("[DEX] " + message);

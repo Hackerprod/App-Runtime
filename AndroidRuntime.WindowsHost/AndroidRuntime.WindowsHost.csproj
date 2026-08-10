@@ -13,6 +13,12 @@
     <ProjectReference Include="..\AndroidRuntime.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Real microphone capture + AAC encoding via Windows Media Foundation
+         (the MF AAC encoder is built into Windows 8+; NAudio is MIT, the
+         standard .NET audio library). -->
+    <PackageReference Include="NAudio" Version="2.2.1" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="AndroidRuntime.WindowsHost.Tests" />
   </ItemGroup>
   <ItemGroup>

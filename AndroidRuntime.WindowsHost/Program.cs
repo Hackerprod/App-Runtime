@@ -41,6 +41,7 @@ public static class Program
         var options = Parse(args);
         using var traceOutput = TraceOutputLease.Open(options.ApkPath, options.TracePath);
         using var capabilityAudit = options.CapabilityAuditPath is string auditPath ? new FileAndroidCapabilityAuditSink(auditPath) : null;
+        using var audioRecorder = new WindowsAudioRecorder();
         using var factory = new WpfActivityWindowFactory();
         using var clipboard = new WindowsClipboardAdapter();
         var connectivity = new WindowsConnectivityAdapter();
@@ -48,7 +49,7 @@ public static class Program
         var runtime = new AndroidAppRuntime();
         await using var hosted = await runtime.LaunchSessionAsync(
             traceOutput.ApkStream,
-            new AndroidRuntimeServices(factory, logs, traceCapacity: 4096, clock: new WindowsAndroidClock(), capabilityPolicy: new AndroidCapabilityPolicy(options.Grants), clipboard: clipboard, connectivity: connectivity, power: new WindowsPowerAdapter(), viewBridgeFactory: ViewRuntimeAndroidViewBridge.TryCreate, capabilityAudit: capabilityAudit));
+            new AndroidRuntimeServices(factory, logs, traceCapacity: 4096, clock: new WindowsAndroidClock(), capabilityPolicy: new AndroidCapabilityPolicy(options.Grants), clipboard: clipboard, connectivity: connectivity, power: new WindowsPowerAdapter(), viewBridgeFactory: ViewRuntimeAndroidViewBridge.TryCreate, capabilityAudit: capabilityAudit, audioRecorder: audioRecorder));
         Console.WriteLine($"READY hwnd={hosted.Window.Handle} title={hosted.Window.Title}");
 
         if (options.CaptureFramePath is string capturePath)
