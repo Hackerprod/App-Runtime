@@ -20,7 +20,19 @@ struct android_view_s {
     android_view_s* parent = nullptr;
     std::vector<android_view_s*> children;
 
-    android_layout_params_t lp{};
+    /* gravity = -1 (ANDROID_GRAVITY_UNSPECIFIED): the AOSP LayoutParams
+     * default (LinearLayout.LayoutParams.gravity = -1, FrameLayout
+     * UNSPECIFIED_GRAVITY = -1), NOT Gravity.NO_GRAVITY (0). Views inflated
+     * without android:layout_gravity keep this sentinel and inherit the
+     * container's gravity at layout time. */
+    android_layout_params_t lp{
+        android_size_t{},              /* width */
+        android_size_t{},              /* height */
+        thicknessf{},                  /* margins_dp */
+        ANDROID_GRAVITY_UNSPECIFIED,   /* gravity = -1 */
+        0.f,                           /* weight */
+        {}                             /* constraint */
+    };
     int32_t gravity = 0;            /* container gravity (LinearLayout/FrameLayout) */
     int32_t visibility = ANDROID_VISIBLE;
     bool enabled = true;
@@ -40,6 +52,12 @@ struct android_view_s {
      * by android_relative_rule_t; value is the target resource id, TRUE(-1)
      * for parent rules, or 0 when unset. */
     int32_t relative_rules[ANDROID_RELATIVE_VERB_COUNT] = {};
+    /* AOSP LayoutParams.mInitialRules: the immutable snapshot of the rules as
+     * inflated. resolveRules re-copies from it before every resolution
+     * (RelativeLayout.java:1553), so START/END verbs are re-resolved from the
+     * original rules each pass and the live mRules array never back-feeds the
+     * resolution. Kept in sync by android_view_set_relative_rule. */
+    int32_t relative_rules_initial[ANDROID_RELATIVE_VERB_COUNT] = {};
     bool relative_align_with_parent = false;
     /* Resolved bounds during the RelativeLayout measure pass (AOSP
      * LayoutParams.mLeft/mRight/mTop/mBottom, VALUE_NOT_SET when free). */
@@ -80,14 +98,30 @@ struct android_view_s {
     float baseline_ascent[4] = {-1.f, -1.f, -1.f, -1.f};   /* per vertical-gravity bucket */
     float baseline_descent[4] = {-1.f, -1.f, -1.f, -1.f};
 
+    /* AOSP LinearLayout.mTotalLength (content extent WITHOUT padding) at the
+     * end of measure; layout_linear reads it for the major-gravity offset
+     * instead of re-summing (the value differs when the weight pass or the
+     * useLargestChild re-sum ran: AOSP mTotalLength semantics, LinearLayout
+     * layoutVertical:1674-1689). */
+    float linear_measured_main = 0.f;
+
     /* TextView family */
     std::string text;
     std::string hint;
     bool has_hint = false;
     float text_size_sp = 16.f;
     color_rgba text_color{1.f, 0.125f, 0.125f, 0.125f};
+    /* Link color (android:textColorLink, AOSP mTextColorLink): separate from
+     * the regular text color; used only for link spans (autoLink/text links). */
+    color_rgba text_color_link{1.f, 0.125f, 0.125f, 0.125f};
+    bool has_text_color_link = false;
     bool single_line = false;
     int32_t text_gravity = 0;
+    /* android:textStyle BOLD bit (Typeface.BOLD = 1). AOSP applies this as
+     * algorithmic fake-bold on the paint (TextView.java:2551
+     * setFakeBoldText((need & Typeface.BOLD) != 0)) — the runtime mirrors it
+     * in the renderer with a synthetic second pass. */
+    bool text_bold = false;
 
     /* ImageView */
     std::string image_source;
@@ -171,12 +205,73 @@ struct android_ui_s {
 
 namespace viewruntime::android {
 
-/* Defined in android_measure_layout.cpp. */
+/* Defined in measure_core.cpp. */
 android_measured_size_t measure_view(
     android_view_s* view, android_measure_spec_t spec_w,
     android_measure_spec_t spec_h, const android_ui_s* ui);
 void layout_view(android_view_s* view, float x, float y, float w, float h,
                  const android_ui_s* ui);
+void apply_gravity(int32_t gravity, float child_w, float child_h,
+                   float container_w, float container_h,
+                   float* out_x, float* out_y);
+const char* display_text(const android_view_s* view);
+android_measured_size_t measure_base(
+    android_view_s* view, android_measure_spec_t spec_w,
+    android_measure_spec_t spec_h, const android_ui_s* ui);
+android_view_s* hit_test(android_view_s* view, float px, float py);
+
+/* Defined in text_view.cpp. */
+android_measured_size_t measure_text_view(
+    android_view_s* view, android_measure_spec_t spec_w,
+    android_measure_spec_t spec_h, const android_ui_s* ui);
+android_measured_size_t measure_checkable(
+    android_view_s* view, android_measure_spec_t spec_w,
+    android_measure_spec_t spec_h, const android_ui_s* ui);
+
+/* Defined in image_view.cpp. */
+android_measured_size_t measure_image(
+    android_view_s* view, android_measure_spec_t spec_w,
+    android_measure_spec_t spec_h, const android_ui_s* ui);
+
+/* Defined in progress_bar.cpp. */
+android_measured_size_t measure_progress(
+    android_view_s* view, android_measure_spec_t spec_w,
+    android_measure_spec_t spec_h, const android_ui_s* ui);
+
+/* Defined in linear_layout.cpp. */
+android_measured_size_t measure_linear(
+    android_view_s* view, android_measure_spec_t spec_w,
+    android_measure_spec_t spec_h, const android_ui_s* ui);
+void layout_linear(android_view_s* view, float x, float y, float w, float h,
+                   const android_ui_s* ui);
+
+/* Defined in frame_layout.cpp. */
+android_measured_size_t measure_frame(
+    android_view_s* view, android_measure_spec_t spec_w,
+    android_measure_spec_t spec_h, const android_ui_s* ui);
+void layout_frame(android_view_s* view, float x, float y, float w, float h,
+                  const android_ui_s* ui);
+
+/* Defined in relative_layout.cpp. */
+android_measured_size_t measure_relative(
+    android_view_s* view, android_measure_spec_t spec_w,
+    android_measure_spec_t spec_h, const android_ui_s* ui);
+void layout_relative(android_view_s* view, float x, float y, float w, float h,
+                     const android_ui_s* ui);
+
+/* Defined in scroll_view.cpp. */
+android_measured_size_t measure_scroll(
+    android_view_s* view, android_measure_spec_t spec_w,
+    android_measure_spec_t spec_h, const android_ui_s* ui);
+void layout_scroll(android_view_s* view, float x, float y, float w, float h,
+                   const android_ui_s* ui);
+
+/* Defined in constraint_layout.cpp. */
+android_measured_size_t measure_constraint(
+    android_view_s* view, android_measure_spec_t spec_w,
+    android_measure_spec_t spec_h, const android_ui_s* ui);
+void layout_constraint(android_view_s* view, float x, float y, float w, float h,
+                       const android_ui_s* ui);
 
 /* Defined in stb_text_measurer.cpp. */
 void android_ui_release_font(android_ui_s* ui);
@@ -294,7 +389,11 @@ inline android_measure_spec_t get_child_measure_spec(
     /* WRAP_CONTENT */
     switch (mode) {
         case ANDROID_MEASURE_UNSPECIFIED:
-            return {0.f, ANDROID_MEASURE_UNSPECIFIED};
+            /* AOSP getChildMeasureSpec: WRAP_CONTENT under UNSPECIFIED keeps
+             * resultSize = size (the parent's size minus padding_used) and the
+             * UNSPECIFIED mode (ViewGroup.java:7105-7110); returning size 0
+             * collapsed cross-axis WRAP children in UNSPECIFIED containers. */
+            return {size, ANDROID_MEASURE_UNSPECIFIED};
         default:
             return {size, ANDROID_MEASURE_AT_MOST};
     }
@@ -303,7 +402,7 @@ inline android_measure_spec_t get_child_measure_spec(
 /* ViewGroup.measureChildWithMargins: the shared primitive every container uses
  * to measure a direct child. */
 inline android_measured_size_t measure_child_with_margins(
-    const android_view_s* parent, android_view_s* child,
+    android_view_s* child,
     android_measure_spec_t spec_w, android_measure_spec_t spec_h,
     const android_ui_s* ui) {
     const float used_w = margin_h(child->lp, ui);

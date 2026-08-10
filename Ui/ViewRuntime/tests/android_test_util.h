@@ -61,6 +61,7 @@ inline void set_wrap(android_view_t view) {
     android_layout_params_t lp{};
     lp.width.kind = ANDROID_SIZE_KIND_WRAP_CONTENT;
     lp.height.kind = ANDROID_SIZE_KIND_WRAP_CONTENT;
+    lp.gravity = ANDROID_GRAVITY_UNSPECIFIED;
     android_view_set_layout_params(view, &lp);
 }
 
@@ -68,6 +69,7 @@ inline void set_match(android_view_t view) {
     android_layout_params_t lp{};
     lp.width.kind = ANDROID_SIZE_KIND_MATCH_PARENT;
     lp.height.kind = ANDROID_SIZE_KIND_MATCH_PARENT;
+    lp.gravity = ANDROID_GRAVITY_UNSPECIFIED;
     android_view_set_layout_params(view, &lp);
 }
 

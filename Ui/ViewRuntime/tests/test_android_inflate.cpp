@@ -85,6 +85,15 @@ const android_attr_t StyleTable::kThemeAttrs[1] = {
      {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFFFF0000)}},
 };
 
+/* Theme 0x7f020012: textViewStyle=?attr/0x01010018 -> @style/0x7f020000, and
+ * textColorLink = teal selector (0x7f010004) so links render their own color. */
+const android_attr_t kThemeWithDefStyleAttrs[2] = {
+    {"android:textViewStyle", 0x01010018,
+     {ANDROID_RAW_TYPE_REFERENCE, nullptr, 0x7f020000, 0.f, 0, 0}},
+    {"android:textColorLink", 0x0101009a,
+     {ANDROID_RAW_TYPE_REFERENCE, nullptr, 0x7f010004, 0.f, 0, 0}},
+};
+
 /* Shape drawable 0x7f020020: <shape><solid android:color="#FF00FF00"/></shape>
  * (solid green). Walked like a style bag. */
 const android_attr_t kDrawableAttrs[1] = {
@@ -130,6 +139,9 @@ bool_t stub_resolve_style(uint32_t id, const android_attr_t** out,
             return true;
         case 0x7f020011:
             *out = kWindowThemeAttrs; *count = 1; *parent = 0;
+            return true;
+        case 0x7f020012:
+            *out = kThemeWithDefStyleAttrs; *count = 2; *parent = 0;
             return true;
         case 0x7f020020:
             *out = kDrawableAttrs; *count = 1; *parent = 0;
@@ -625,6 +637,300 @@ void test_inflate_drawable_bag_and_color_selector() {
     android_ui_destroy(ui);
 }
 
+/* Text pipeline end-to-end with a real font: android_ui_set_font loads the
+ * SAME bytes the surface renders with (propagated), so a Button with text
+ * paints real glyphs instead of the no-font solid-block fallback. */
+void test_inflate_text_paints_real_glyphs() {
+    android_ui_options_t opts{};
+    opts.density = 1.f;
+    opts.scaled_density = 1.f;
+    android_ui_t ui = nullptr;
+    expect_ok(android_ui_create(&opts, &ui), "create ui");
+    android_ui_set_resource_bridge(ui, stub_resolve_resource,
+                                   stub_resolve_style, stub_fetch_file, nullptr);
+    void* surface = viewruntime_surface_create(nullptr);
+    expect(surface != nullptr, "surface created");
+    viewruntime_surface_resize(surface, 64, 24, 1.f);
+    android_ui_set_surface(ui, surface);
+
+    /* Load a real system font; the same bytes must reach the surface. */
+    const char* font_path = "C:\\Windows\\Fonts\\arial.ttf";
+    const status_t font_st = android_ui_set_font(ui, font_path);
+    expect(font_st == OK, "set_font loads arial.ttf");
+    if (font_st != OK) {
+        android_ui_destroy(ui);
+        viewruntime_surface_destroy(surface);
+        return;
+    }
+
+    /* LinearLayout (match_parent) > TextView "AB" (wrap_content): the child's
+     * wrap_content honors the real glyph metrics. */
+    android_attr_t root_attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_STRING, "match_parent", 0, 0.f, 0, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_STRING, "match_parent", 0, 0.f, 0, 0}),
+    };
+    android_attr_t attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_STRING, "wrap_content", 0, 0.f, 0, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_STRING, "wrap_content", 0, 0.f, 0, 0}),
+        attr_lit("android:text", {ANDROID_RAW_TYPE_STRING, "AB", 0, 0.f, 0, 0}),
+        attr_lit("android:textSize",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 16.f, ANDROID_DIMEN_UNIT_SP, 0}),
+        attr_lit("android:textColor",
+                 {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF000000)}),
+    };
+    android_node_t nodes[] = {
+        {"LinearLayout", 0, -1, 0, 2, root_attrs},
+        {"TextView", 0x7f0f0001, 0, 0, 5, attrs},
+    };
+    android_view_t root = nullptr;
+    expect_ok(android_ui_inflate(ui, nodes, 2, &root), "inflate");
+
+    /* Wrap_content of "AB" at 16sp must be the REAL glyph advance, not the
+     * 0.56*size proportional fallback (which would be ~17.9px for 2 chars).
+     * Measure through the API that shares the loaded font. */
+    android_text_metrics_t metrics{};
+    const status_t mst = android_ui_measure_text(ui, "AB", 16.f, 0.f, &metrics);
+    expect(mst == OK, "measure_text with loaded font");
+    expect(metrics.width > 8.f && metrics.width < 25.f,
+           "text width from real font metrics, not block fallback");
+    /* Real Arial "AB" at 16px is ~18px; the proportional fallback is also
+     * ~18px, so the discriminator is the render below, not just width. */
+
+    display_list_t list = nullptr;
+    expect_ok(android_ui_record(ui, root, &list), "record");
+    expect_ok(android_ui_render(ui, list), "render");
+    const uint8_t* px = nullptr;
+    int pitch = 0, w = 0, h = 0;
+    viewruntime_surface_pixels(surface, &px, &pitch, &w, &h);
+    /* Real glyphs are NOT a uniform solid block: the "A" stroke area has
+     * opaque pixels, but the box is not uniformly opaque (the no-font
+     * fallback fills the whole rect uniformly). */
+    int dark = 0, total = 0;
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            ++total;
+            const uint8_t* p = px + y * pitch + x * 4;
+            if (p[3] > 200) ++dark; /* opaque (alpha) pixel */
+        }
+    }
+    expect(dark > 0 && dark < total / 2,
+           "glyph coverage: some opaque pixels, not a full block");
+
+    display_list_destroy(list);
+    viewruntime_surface_destroy(surface);
+    android_ui_destroy(ui);
+}
+
+/* AOSP defStyleAttr + textColorLink: a TextView with NO explicit style=
+ * inherits its default style from the theme via ?attr/textViewStyle (the
+ * chain's textColor white applies), and a TextView with
+ * android:textColorLink resolves its OWN link color (separate from
+ * textColor). textViewStyle=0x01010018 is the id VERIFIED from real data. */
+void test_inflate_def_style_attr_and_text_color_link() {
+    android_ui_options_t opts{};
+    opts.density = 1.f;
+    opts.scaled_density = 1.f;
+    android_ui_t ui = nullptr;
+    expect_ok(android_ui_create(&opts, &ui), "create ui");
+    android_ui_set_resource_bridge(ui, stub_resolve_resource,
+                                   stub_resolve_style, stub_fetch_file, nullptr);
+
+    /* Theme 0x7f020012 defines textViewStyle (0x01010018) -> style 0x7f020000
+     * (textColor white via its chain). */
+    android_attr_t root_attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_STRING, "match_parent", 0, 0.f, 0, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_STRING, "wrap_content", 0, 0.f, 0, 0}),
+    };
+    /* TextView WITHOUT style=: defStyleAttr must pull textViewStyle from the
+     * theme. TextView WITH textColorLink: link color resolves separately. */
+    android_attr_t plain_attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_STRING, "wrap_content", 0, 0.f, 0, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_STRING, "wrap_content", 0, 0.f, 0, 0}),
+        attr_lit("android:text", {ANDROID_RAW_TYPE_STRING, "title", 0, 0.f, 0, 0}),
+    };
+    android_attr_t link_attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_STRING, "wrap_content", 0, 0.f, 0, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_STRING, "wrap_content", 0, 0.f, 0, 0}),
+        attr_lit("android:text", {ANDROID_RAW_TYPE_STRING, "link", 0, 0.f, 0, 0}),
+        attr_lit("android:textColor",
+                 {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF000000)}),
+        attr_lit("android:textColorLink",
+                 {ANDROID_RAW_TYPE_REFERENCE, nullptr, 0x7f010004, 0.f, 0, 0}),
+    };
+    android_node_t nodes[] = {
+        {"LinearLayout", 0, -1, 0x7f020012 /* theme with textViewStyle */, 2, root_attrs},
+        {"TextView", 0x7f0f0001, 0, 0, 3, plain_attrs},
+        {"TextView", 0x7f0f0002, 0, 0, 5, link_attrs},
+    };
+    android_view_t root = nullptr;
+    expect_ok(android_ui_inflate(ui, nodes, 3, &root), "inflate");
+
+    /* Plain TextView inherits textColor WHITE from the theme's
+     * textViewStyle chain (defStyleAttr). */
+    android_view_t plain = android_ui_find_view_by_id(ui, 0x7f0f0001);
+    expect(plain != nullptr, "find plain TextView");
+    color_rgba tc{};
+    expect_ok(android_view_get_text_color(plain, &tc), "plain text color");
+    expect(tc.r == 1.f && tc.g == 1.f && tc.b == 1.f,
+           "textColor white via theme defStyleAttr (textViewStyle)");
+
+    /* TextView's link color resolves to the accent teal selector, separate
+     * from its regular black text color. */
+    android_view_t link = android_ui_find_view_by_id(ui, 0x7f0f0002);
+    expect(link != nullptr, "find TextView");
+    color_rgba tc2{};
+    expect_ok(android_view_get_text_color(link, &tc2), "link text color");
+    expect(tc2.r == 0.f && tc2.g == 0.f && tc2.b == 0.f,
+           "regular textColor stays black");
+    color_rgba linkc{};
+    expect_ok(android_view_get_text_color_link(link, &linkc), "link color");
+    expect(linkc.r < 0.05f && linkc.g > 0.8f && linkc.b > 0.7f && linkc.a == 1.f,
+           "textColorLink resolves to accent teal (#FF03DAC5)");
+
+    android_ui_destroy(ui);
+}
+
+/* Regression: AXML binary encodes layout_width/layout_height special
+ * constants as typed INT_DEC, NOT strings — MATCH_PARENT=-1, WRAP_CONTENT=-2
+ * (ViewGroup.LayoutParams, ViewGroup.java:8312/8319). The serializer dump of
+ * the real SKYNET APK shows layout_width=IntDecimal data=0xfffffffe for the
+ * title. Before the fix, size_from_raw fell into EXACT and every wrap/match
+ * child measured 0x0. */
+void test_inflate_axml_int_size_constants() {
+    android_ui_options_t opts{};
+    opts.density = 1.f;
+    opts.scaled_density = 1.f;
+    android_ui_t ui = nullptr;
+    expect_ok(android_ui_create(&opts, &ui), "create ui");
+
+    android_attr_t attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_INT_DEC, nullptr, 0, 0.f, 0, -1}),  /* MATCH_PARENT */
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_INT_DEC, nullptr, 0, 0.f, 0, -2}),  /* WRAP_CONTENT */
+    };
+    android_node_t node{};
+    node.class_name = "TextView";
+    node.parent_index = -1;
+    node.attr_count = 2;
+    node.attrs = attrs;
+
+    android_view_t root = nullptr;
+    expect_ok(android_ui_inflate(ui, &node, 1, &root), "inflate INT_DEC sizes");
+
+    android_layout_params_t lp{};
+    expect_ok(android_view_get_layout_params(root, &lp), "get lp");
+    expect(lp.width.kind == ANDROID_SIZE_KIND_MATCH_PARENT,
+           "INT_DEC -1 -> MATCH_PARENT");
+    expect(lp.height.kind == ANDROID_SIZE_KIND_WRAP_CONTENT,
+           "INT_DEC -2 -> WRAP_CONTENT");
+
+    /* The real bug: these used to become EXACT 0dp and measure 0x0. */
+    expect_ok(android_ui_measure(ui, root, 432.f, 768.f), "measure");
+    sizef m{};
+    expect_ok(android_view_get_measured_size(root, &m), "get measured");
+    expect(m.width == 432.f, "MATCH_PARENT width resolves to parent width (not 0)");
+
+    android_ui_destroy(ui);
+}
+
+/* Regression: a Button's text must be CENTERED inside the button. The
+ * text_gravity mask bug (CENTER 0x11 shares the 0x01 bit with RIGHT 0x05)
+ * misaligned the text to the right edge. Exercises the REAL paint path:
+ * inflate -> measure -> layout -> record -> render, then reads pixels. */
+void test_inflate_button_text_centered() {
+    android_ui_options_t opts{};
+    opts.density = 1.f;
+    opts.scaled_density = 1.f;
+    android_ui_t ui = nullptr;
+    expect_ok(android_ui_create(&opts, &ui), "create ui");
+
+    const char* font_path = nullptr;
+    static const char* candidates[] = {
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    };
+    for (const char* c : candidates) {
+        FILE* f = std::fopen(c, "rb");
+        if (f) { std::fclose(f); font_path = c; break; }
+    }
+    if (!font_path) { android_ui_destroy(ui); return; } /* no font: skip */
+    expect_ok(android_ui_set_font(ui, font_path), "set font");
+
+    void* surface = viewruntime_surface_create(font_path);
+    expect(surface != nullptr, "surface created");
+    viewruntime_surface_resize(surface, 300, 120, 1.f);
+    android_ui_set_surface(ui, surface);
+
+    /* Button 200x60, "Connect" 18sp bold, textColor black, gravity CENTER. */
+    android_attr_t attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 200.f, ANDROID_DIMEN_UNIT_DIP, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 60.f, ANDROID_DIMEN_UNIT_DIP, 0}),
+        attr_lit("android:textSize",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 18.f, ANDROID_DIMEN_UNIT_SP, 0}),
+        attr_lit("android:textStyle", {ANDROID_RAW_TYPE_INT_DEC, nullptr, 0, 0.f, 0, 1}),
+        attr_lit("android:text", {ANDROID_RAW_TYPE_STRING, "Connect", 0, 0.f, 0, 0}),
+        attr_lit("android:gravity", {ANDROID_RAW_TYPE_INT_DEC, nullptr, 0, 0.f, 0, ANDROID_GRAVITY_CENTER}),
+        attr_lit("android:textColor", {ANDROID_RAW_TYPE_INT_COLOR, nullptr, 0, 0.f, 0, static_cast<int32_t>(0xFF000000)}),
+    };
+    android_node_t node{};
+    node.class_name = "Button";
+    node.parent_index = -1;
+    node.attr_count = 7;
+    node.attrs = attrs;
+
+    android_view_t root = nullptr;
+    expect_ok(android_ui_inflate(ui, &node, 1, &root), "inflate");
+    expect_ok(android_ui_measure(ui, root, 300.f, 120.f), "measure");
+    expect_ok(android_ui_layout(ui, root, 50.f, 30.f, 200.f, 60.f), "layout");
+
+    display_list_t list = nullptr;
+    expect_ok(android_ui_record(ui, root, &list), "record");
+    expect_ok(android_ui_render(ui, list), "render");
+
+    const uint8_t* px = nullptr;
+    int pitch = 0, w = 0, h = 0;
+    viewruntime_surface_pixels(surface, &px, &pitch, &w, &h);
+    int minx = 9999, maxx = -1, miny = 9999, maxy = -1, count = 0;
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const uint8_t* p = px + y * pitch + x * 4; /* b,g,r,a */
+            if (p[3] != 0 && p[2] < 64 && p[1] < 64 && p[0] < 64) { /* black text */
+                if (x < minx) minx = x;
+                if (x > maxx) maxx = x;
+                if (y < miny) miny = y;
+                if (y > maxy) maxy = y;
+                count++;
+            }
+        }
+    }
+    expect(count > 0, "button text rendered");
+    if (count > 0) {
+        const int cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
+        /* Button center is (150, 60); the mask bug pushed text to the right
+         * edge (~x 240+). Allow 12px tolerance for glyph asymmetry. */
+        expect(cx > 100 && cx < 200, "text horizontally centered in button");
+        expect(cy > 40 && cy < 80, "text vertically centered in button");
+    }
+
+    display_list_destroy(list);
+    viewruntime_surface_destroy(surface);
+    android_ui_destroy(ui);
+}
+
 } // namespace
 
 int main() {
@@ -636,6 +942,10 @@ int main() {
     test_inflate_image_decode_pipeline();
     test_inflate_ltr_relative_gravity_and_margin();
     test_inflate_drawable_bag_and_color_selector();
+    test_inflate_text_paints_real_glyphs();
+    test_inflate_def_style_attr_and_text_color_link();
+    test_inflate_axml_int_size_constants();
+    test_inflate_button_text_centered();
     if (g_failures != 0) {
         std::fprintf(stderr, "%d FAILURES\n", g_failures);
         return 1;

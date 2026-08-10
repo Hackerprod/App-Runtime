@@ -5,6 +5,7 @@
  * layout and paint agree. */
 
 #include "../include/viewruntime/viewruntime_backend.h"
+#include "../include/viewruntime/viewruntime.h" /* TEXT_ALIGN_* / FONT_WEIGHT_* */
 
 #include "../third_party/stb_truetype.h" /* declarations only; the
                                             implementation lives in
@@ -273,6 +274,24 @@ static void draw_image(Surface* s, const Image& img,
     }
 }
 
+/* Load stb_truetype from owned bytes; returns false on failure (caller keeps
+ * ownership of `data` and `face` on failure). */
+static bool surface_load_font(Surface* s, uint8_t* data, size_t size) {
+    if (!data || size == 0) return false;
+    stbtt_fontinfo* face = new (std::nothrow) stbtt_fontinfo();
+    if (!face || !stbtt_InitFont(face, data, 0)) {
+        delete face;
+        return false;
+    }
+    /* Replace any previous font. */
+    delete s->font;
+    std::free(s->font_data);
+    s->font = face;
+    s->font_data = data;
+    s->font_data_size = size;
+    return true;
+}
+
 } // namespace viewruntime_backend
 
 /* ── C ABI ─────────────────────────────────────────────────────────── */
@@ -296,13 +315,8 @@ VIEWRUNTIME_BACKEND_API void* viewruntime_surface_create(const char* font_path) 
                 uint8_t* data = static_cast<uint8_t*>(std::malloc(static_cast<size_t>(len)));
                 if (data && std::fread(data, 1, static_cast<size_t>(len), f) ==
                                 static_cast<size_t>(len)) {
-                    stbtt_fontinfo* face = new (std::nothrow) stbtt_fontinfo();
-                    if (face && stbtt_InitFont(face, data, 0)) {
-                        s->font = face;
-                        s->font_data = data;
-                        s->font_data_size = static_cast<size_t>(len);
-                    } else {
-                        delete face;
+                    if (!viewruntime_backend::surface_load_font(
+                            s, data, static_cast<size_t>(len))) {
                         std::free(data);
                     }
                 } else {
@@ -313,6 +327,20 @@ VIEWRUNTIME_BACKEND_API void* viewruntime_surface_create(const char* font_path) 
         }
     }
     return s;
+}
+
+/* Install the exact bytes the UI session measures with (android_ui_set_font
+ * propagates them here), so paint and measure use the same font. */
+VIEWRUNTIME_BACKEND_API void viewruntime_surface_set_font(
+    void* surface, const uint8_t* font_data, int32_t font_size) {
+    Surface* s = static_cast<Surface*>(surface);
+    if (!s || !font_data || font_size <= 0) return;
+    uint8_t* copy = static_cast<uint8_t*>(std::malloc(static_cast<size_t>(font_size)));
+    if (!copy) return;
+    std::memcpy(copy, font_data, static_cast<size_t>(font_size));
+    if (!viewruntime_backend::surface_load_font(s, copy, static_cast<size_t>(font_size))) {
+        std::free(copy);
+    }
 }
 
 VIEWRUNTIME_BACKEND_API void viewruntime_surface_destroy(void* surface) {
@@ -352,7 +380,7 @@ VIEWRUNTIME_BACKEND_API void viewruntime_draw_text(
     void* surface, float x, float y, float w, float h,
     const uint16_t* utf16_text, int32_t text_len,
     float text_size_px, uint8_t a, uint8_t r, uint8_t g, uint8_t b,
-    int32_t /*view_id*/) {
+    int32_t /*view_id*/, int32_t text_align, int32_t bold) {
     Surface* s = static_cast<Surface*>(surface);
     if (!s || !utf16_text || text_len <= 0 || s->pixels.empty()) return;
     if (s->font == nullptr) {
@@ -376,6 +404,47 @@ VIEWRUNTIME_BACKEND_API void viewruntime_draw_text(
     const int clip_y1 = static_cast<int>(std::ceil(y + h));
 
     float pen_x = x;
+    if (text_align == TEXT_ALIGN_CENTER) {
+        /* AOSP Layout.draw centers the line: x = (left + right - max) >> 1
+         * (Layout.java:1209-1211). Measure the run so the pen starts aligned. */
+        float run_w = 0.f;
+        {
+            float p = 0.f;
+            int prv = 0;
+            for (int i = 0; i < text_len;) {
+                unsigned int cp = 0;
+                const int n = viewruntime_backend::utf16_decode(utf16_text, text_len, i, &cp);
+                if (n == 0) break;
+                i += n;
+                if (prv != 0) p += stbtt_GetCodepointKernAdvance(s->font, prv, static_cast<int>(cp)) * scale;
+                int adv = 0, lsb = 0;
+                stbtt_GetCodepointHMetrics(s->font, static_cast<int>(cp), &adv, &lsb);
+                p += static_cast<float>(adv) * scale;
+                prv = static_cast<int>(cp);
+            }
+            run_w = p;
+        }
+        pen_x = x + std::max(0.f, (w - run_w) * 0.5f);
+    } else if (text_align == TEXT_ALIGN_END || text_align == TEXT_ALIGN_RIGHT) {
+        float run_w = 0.f;
+        {
+            float p = 0.f;
+            int prv = 0;
+            for (int i = 0; i < text_len;) {
+                unsigned int cp = 0;
+                const int n = viewruntime_backend::utf16_decode(utf16_text, text_len, i, &cp);
+                if (n == 0) break;
+                i += n;
+                if (prv != 0) p += stbtt_GetCodepointKernAdvance(s->font, prv, static_cast<int>(cp)) * scale;
+                int adv = 0, lsb = 0;
+                stbtt_GetCodepointHMetrics(s->font, static_cast<int>(cp), &adv, &lsb);
+                p += static_cast<float>(adv) * scale;
+                prv = static_cast<int>(cp);
+            }
+            run_w = p;
+        }
+        pen_x = x + std::max(0.f, w - run_w);
+    }
     const int pen_base_y = static_cast<int>(std::round(y + baseline_offset));
     int previous = 0;
     for (int i = 0; i < text_len;) {
@@ -400,6 +469,13 @@ VIEWRUNTIME_BACKEND_API void viewruntime_draw_text(
                 viewruntime_backend::blit_glyph(s, bitmap, gw, gh, xoff, yoff,
                                                 static_cast<int>(std::floor(pen_x)),
                                                 pen_base_y, color);
+                /* AOSP algorithmic fake-bold (setFakeBoldText,
+                 * TextView.java:2551): second pass offset +1px. */
+                if (bold) {
+                    viewruntime_backend::blit_glyph(s, bitmap, gw, gh, xoff, yoff,
+                                                    static_cast<int>(std::floor(pen_x)) + 1,
+                                                    pen_base_y, color);
+                }
                 stbtt_FreeBitmap(bitmap, nullptr);
             }
         }

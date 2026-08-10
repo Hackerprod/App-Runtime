@@ -9,6 +9,7 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "../third_party/stb_truetype.h"
 
+#include "../include/viewruntime/viewruntime_backend.h"
 #include "../src/android/android_types.h"
 
 #include <cmath>
@@ -207,6 +208,13 @@ API status_t android_ui_set_font(android_ui_t ui, const char* path) {
     u->font_face = face;
     ui->text_measurer = viewruntime::android::stb_text_measurer;
     ui->text_measurer_data = ui;
+
+    /* Keep paint and measure on the SAME font: propagate the exact bytes to
+     * the registered render surface so draw_text renders real glyphs instead
+     * of the no-font solid-block fallback. */
+    if (ui->surface) {
+        viewruntime_surface_set_font(ui->surface, data, static_cast<int32_t>(len));
+    }
     return OK;
 }
 

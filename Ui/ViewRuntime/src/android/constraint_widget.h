@@ -111,7 +111,11 @@ struct ConstraintWidget {
     bool is_in_barrier(int orientation) const {
         return orientation == HORIZONTAL ? in_barrier_h : in_barrier_v;
     }
-    virtual bool allowed_in_barrier() { return true; }
+    /* AOSP ConstraintWidget.allowedInBarrier returns mVisibility != GONE
+     * (ConstraintWidget.java:1910-1912). GONE widgets (set via set_visibility
+     * from the view visibility in constraint_layout.cpp) are excluded from a
+     * barrier that rejects gone widgets. */
+    virtual bool allowed_in_barrier() { return visibility != GONE; }
 
     /* Chains (AOSP mHorizontalChainStyle/mVerticalChainStyle, mWeight[2],
      * mNextChainWidget[2], mListNextMatchConstraintsWidget[2],
@@ -357,7 +361,10 @@ struct Guideline : public ConstraintWidget {
     /* AOSP Guideline.getAnchor: the guideline exposes a single shared anchor
      * (LEFT/RIGHT for vertical, TOP/BOTTOM for horizontal) and null for the
      * other types. */
+    /* AOSP Guideline.allowedInBarrier returns true unconditionally
+     * (coreGuideline.java:67-70). */
     ConstraintAnchor* get_anchor(ConstraintAnchor::Type type) override;
+    bool allowed_in_barrier() override { return true; }
     void create_object_variables(ConstraintSystem& system) override;
 
     void add_to_solver(ConstraintSystem& system, bool optimize) override;

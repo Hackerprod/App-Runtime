@@ -126,6 +126,14 @@ typedef struct {
  * the RELATIVE_LAYOUT_DIRECTION axis bit exactly like AOSP (0x00800000), so
  * the numeric values match the real framework. */
 #define ANDROID_GRAVITY_NO_GRAVITY     0x0000
+
+/* LayoutParams.gravity sentinel: AOSP LinearLayout.LayoutParams and
+ * FrameLayout.LayoutParams default gravity to -1 (FrameLayout names it
+ * UNSPECIFIED_GRAVITY), which means "inherit the container's gravity"
+ * (LinearLayout: gravity < 0 -> minorGravity, LinearLayout.java:1702) or
+ * "use DEFAULT_CHILD_GRAVITY" (FrameLayout.layoutChildren). This is distinct
+ * from ANDROID_GRAVITY_NO_GRAVITY (0), which is a valid explicit gravity. */
+#define ANDROID_GRAVITY_UNSPECIFIED   (-1)
 #define ANDROID_GRAVITY_CENTER_HORIZONTAL 0x0001
 #define ANDROID_GRAVITY_LEFT            0x0003
 #define ANDROID_GRAVITY_RIGHT           0x0005
@@ -605,6 +613,7 @@ API status_t android_ui_inflate(
  * view state (the guest bytecode asks App Runtime, App Runtime relays here). */
 API status_t android_view_get_text(android_view_t view, const char** out_text);
 API status_t android_view_get_text_color(android_view_t view, color_rgba* out_color);
+API status_t android_view_get_text_color_link(android_view_t view, color_rgba* out_color);
 API status_t android_view_get_background_color(android_view_t view, color_rgba* out_color);
 /* View.getLayoutParams / getPaddingLeft equivalents (raw dp, unconverted). */
 API status_t android_view_get_layout_params(android_view_t view, android_layout_params_t* out_params);

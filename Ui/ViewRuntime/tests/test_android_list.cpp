@@ -111,8 +111,9 @@ static void test_recycler_horizontal() {
     }
     frame_and_layout(ui, recycler, 200.f, 300.f);
     scroll_metrics_t m = android_view_get_scroll_metrics(recycler);
-    /* "XX" = 2 * 0.56 * 32 = 35.84; 10 * 35.84 = 358.4 -> x overflow 158.4 */
-    EXPECT_NEAR(m.scrollable_overflow_x, 158.4, 0.01);
+    /* "XX" = ceil(2 * 0.56 * 32) = 36 (AOSP TextView width ceil);
+     * 10 * 36 = 360 -> x overflow 160 */
+    EXPECT_NEAR(m.scrollable_overflow_x, 160.0, 0.01);
     android_view_set_scroll_offset(recycler, 50.f, 0.f);
     android_ui_layout(ui, recycler, 0.f, 0.f, 200.f, 300.f);
     rectf first{};

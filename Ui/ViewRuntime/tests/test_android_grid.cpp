@@ -136,11 +136,12 @@ static void test_fill_gravity() {
     android_view_get_bounds(a, &ba);
     android_view_get_bounds(b, &bb);
     /* FILL children are flexible: no max constraints, so columns keep their
-     * natural width and the trailing column absorbs the excess. */
+     * natural width and the trailing column absorbs the excess. Width ceil
+     * (AOSP TextView.onMeasure): ceil(0.56*32) = 18 per glyph. */
     EXPECT_NEAR(ba.x, 0.0, 0.01);
-    EXPECT_NEAR(ba.width, 17.92, 0.01);
-    EXPECT_NEAR(bb.x, 17.92, 0.01);
-    EXPECT_NEAR(bb.width, 200.0 - 17.92, 0.01);
+    EXPECT_NEAR(ba.width, 18.0, 0.01);
+    EXPECT_NEAR(bb.x, 18.0, 0.01);
+    EXPECT_NEAR(bb.width, 200.0 - 18.0, 0.01);
     android_ui_destroy(ui);
 }
 

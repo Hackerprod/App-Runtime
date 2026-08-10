@@ -54,7 +54,7 @@ void emit_stroke_rounded_rect(display_list_s* list, rectf rect,
 
 void emit_draw_text(display_list_s* list, rectf rect, const char* text,
                     float font_size_px, int32_t text_align, color_rgba color,
-                    bool wrap) {
+                    bool wrap, bool bold = false) {
     char* owned = dup_string(text);
     if (!owned) return;
     paint_command_t cmd{};
@@ -62,7 +62,7 @@ void emit_draw_text(display_list_s* list, rectf rect, const char* text,
     cmd.data.draw_text.text = owned;
     cmd.data.draw_text.rect = rect;
     cmd.data.draw_text.font_size = font_size_px;
-    cmd.data.draw_text.font_weight = FONT_WEIGHT_NORMAL;
+    cmd.data.draw_text.font_weight = bold ? FONT_WEIGHT_BOLD : FONT_WEIGHT_NORMAL;
     cmd.data.draw_text.text_align = text_align;
     cmd.data.draw_text.color = color;
     cmd.data.draw_text.wrap = wrap ? TRUE : FALSE;
@@ -99,15 +99,21 @@ rectf text_rect(const android_view_s* view, const android_ui_s* ui,
     const rectf cell = {view->bounds.x + l, view->bounds.y + t,
                                std::max(0.f, view->bounds.width - l - r),
                                std::max(0.f, view->bounds.height - t - b)};
-    const int32_t g = view->text_gravity;
+    const int32_t g = gravity_normalize_ltr(view->text_gravity);
+    /* Mask + equality, exactly like AOSP Gravity.apply — never bitwise `&`
+     * on the raw value: CENTER (0x11) shares the 0x01 bit with RIGHT (0x05),
+     * so `g & RIGHT` is true for CENTER and misaligns the text to the right
+     * (the same class of bug fixed in apply_gravity). */
     float align = TEXT_ALIGN_LEFT;
-    if (g & (ANDROID_GRAVITY_RIGHT)) align = TEXT_ALIGN_RIGHT;
-    else if (g & (ANDROID_GRAVITY_CENTER_HORIZONTAL | ANDROID_GRAVITY_CENTER)) align = TEXT_ALIGN_CENTER;
+    const int32_t hgrav = g & ANDROID_GRAVITY_FILL_HORIZONTAL;
+    if (hgrav == ANDROID_GRAVITY_RIGHT) align = TEXT_ALIGN_RIGHT;
+    else if (hgrav == ANDROID_GRAVITY_CENTER_HORIZONTAL) align = TEXT_ALIGN_CENTER;
     *out_text_align = align;
 
     float y = cell.y;
-    if (g & (ANDROID_GRAVITY_BOTTOM)) y = cell.y + std::max(0.f, cell.height - text_height_px);
-    else if (g & (ANDROID_GRAVITY_CENTER_VERTICAL | ANDROID_GRAVITY_CENTER)) y = cell.y + std::max(0.f, cell.height - text_height_px) * 0.5f;
+    const int32_t vgrav = g & ANDROID_GRAVITY_FILL_VERTICAL;
+    if (vgrav == ANDROID_GRAVITY_BOTTOM) y = cell.y + std::max(0.f, cell.height - text_height_px);
+    else if (vgrav == ANDROID_GRAVITY_CENTER_VERTICAL) y = cell.y + std::max(0.f, cell.height - text_height_px) * 0.5f;
     return {cell.x, y, cell.width, std::max(0.f, cell.height - (y - cell.y))};
 }
 
@@ -122,7 +128,7 @@ void paint_text_view(const android_view_s* view, display_list_s* list,
     float align = TEXT_ALIGN_LEFT;
     const rectf rect = text_rect(view, ui, metrics.height, &align);
     emit_draw_text(list, rect, text, size_px, static_cast<int32_t>(align),
-                   view->text_color, !view->single_line);
+                   view->text_color, !view->single_line, view->text_bold);
 }
 
 void paint_checkable(const android_view_s* view, display_list_s* list,
@@ -361,7 +367,9 @@ API status_t android_ui_render(
                                       static_cast<uint8_t>(d.color.a * 255.f),
                                       static_cast<uint8_t>(d.color.r * 255.f),
                                       static_cast<uint8_t>(d.color.g * 255.f),
-                                      static_cast<uint8_t>(d.color.b * 255.f), 0);
+                                      static_cast<uint8_t>(d.color.b * 255.f), 0,
+                                      d.text_align,
+                                      d.font_weight == FONT_WEIGHT_BOLD ? 1 : 0);
                 break;
             }
             case PAINT_DRAW_IMAGE: {

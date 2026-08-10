@@ -692,6 +692,39 @@ static void test_gone_single_connection() {
     delete a; delete b;
 }
 
+/* CA6: ConstraintWidget.allowedInBarrier() == (mVisibility != GONE)
+ * (ConstraintWidget.java:1910-1912). A barrier that rejects gone widgets
+ * (allowsGoneWidget == false) must skip a GONE helper; A is GONE but its
+ * collapsed LEFT-anchor position (margin 200) would otherwise pull the RIGHT
+ * barrier to 200 instead of B's right edge (100). */
+static void test_barrier_excludes_gone_when_not_allowed() {
+    ConstraintWidgetContainer root(0.f, 0.f, 800.f, 600.f);
+    ConstraintWidget* a = new ConstraintWidget(100.f, 20.f);
+    ConstraintWidget* b = new ConstraintWidget(100.f, 20.f);
+    Barrier* barrier = new Barrier();
+    barrier->set_barrier_type(Barrier::RIGHT);
+    barrier->set_allows_gone_widget(false);
+    barrier->add_helper_widget(a);
+    barrier->add_helper_widget(b);
+
+    root.add(a);
+    root.add(b);
+    root.add(barrier);
+
+    a->set_visibility(ConstraintWidget::GONE);
+    a->connect(ConstraintAnchor::Type::LEFT, &root, ConstraintAnchor::Type::LEFT, 200.f);
+    a->connect(ConstraintAnchor::Type::TOP, &root, ConstraintAnchor::Type::TOP);
+
+    b->connect(ConstraintAnchor::Type::LEFT, &root, ConstraintAnchor::Type::LEFT);
+    b->connect(ConstraintAnchor::Type::TOP, &root, ConstraintAnchor::Type::TOP);
+
+    root.layout();
+
+    EXPECT_NEAR(barrier->get_left(), 100.f, 1e-3f);
+
+    delete a; delete b; delete barrier;
+}
+
 int main() {
     test_adding_widgets();
     test_widget_top_right_positioning();
@@ -713,6 +746,7 @@ int main() {
     test_wrap_guideline2();
     test_wrap_percent();
     test_gone_single_connection();
+    test_barrier_excludes_gone_when_not_allowed();
     return test_result();
 }
 

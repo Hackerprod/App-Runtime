@@ -40,7 +40,8 @@ VIEWRUNTIME_BACKEND_API void viewruntime_draw_text(
     void* surface, float x, float y, float w, float h,
     const uint16_t* utf16_text, int32_t text_len,
     float text_size_px, uint8_t a, uint8_t r, uint8_t g, uint8_t b,
-    int32_t view_id);
+    int32_t view_id,
+    int32_t text_align, int32_t bold);
 /* Upload (or replace) a decoded image under `source`. Pixels are straight
  * ARGB8888, row-major, width*4 pitch. The surface owns a copy; call again
  * with the same source to update it. */
@@ -57,6 +58,12 @@ VIEWRUNTIME_BACKEND_API void viewruntime_draw_image(
     float dst_x, float dst_y, float dst_w, float dst_h,
     int32_t view_id);
 VIEWRUNTIME_BACKEND_API void viewruntime_frame_end(void* surface);
+
+/* Install the SAME TrueType bytes the UI session measures with, so paint and
+ * measure agree pixel-for-pixel. The surface owns a copy; call once after
+ * android_ui_set_font (the surface may also be created with a font_path). */
+VIEWRUNTIME_BACKEND_API void viewruntime_surface_set_font(
+    void* surface, const uint8_t* font_data, int32_t font_size);
 
 /* Text measurement — same font/metrics path as viewruntime_draw_text. */
 VIEWRUNTIME_BACKEND_API void viewruntime_measure_text(

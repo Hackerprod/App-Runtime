@@ -229,7 +229,56 @@ static void test_hit_test() {
     EXPECT(android_ui_hit_test(ui, frame, 5.f, 5.f) == frame);
     EXPECT(android_ui_hit_test(ui, frame, 250.f, 350.f) == nullptr);
     android_view_set_enabled(child, FALSE);
-    EXPECT(android_ui_hit_test(ui, frame, 100.f, 150.f) == frame);
+    /* MC1: AOSP does not filter touch targeting by enabled — a disabled view
+     * is still the hit target (it receives the event, just does not consume
+     * it; canReceivePointerEvents gates on VISIBILITY only, View.java:
+     * 16638-16640 / ViewGroup.java:2756). */
+    EXPECT(android_ui_hit_test(ui, frame, 100.f, 150.f) == child);
+    android_ui_destroy(ui);
+}
+
+/* AOSP gravity sentinel: lp.gravity defaults to -1 (UNSPECIFIED_GRAVITY), NOT
+ * Gravity.NO_GRAVITY (0). A child without an explicit layout_gravity inherits
+ * the container's cross-axis gravity in a LinearLayout
+ * (LinearLayout.java:1702-1705: `if (gravity < 0) gravity = minorGravity;`).
+ * This is the regression test for the SKYNET title offset (child was NOT
+ * inheriting the container's CENTER gravity). */
+static void test_linear_unspecified_gravity_inherits_container() {
+    android_ui_t ui = make_ui();
+    android_view_t root = make_view(ui, ANDROID_VIEW_LINEAR_LAYOUT);
+    set_match(root);
+    android_view_set_gravity(root, ANDROID_GRAVITY_CENTER_HORIZONTAL);
+    android_view_t child = make_view(ui, ANDROID_VIEW_TEXT_VIEW);
+    set_wrap(child); /* no layout_gravity -> lp.gravity = -1 */
+    android_view_set_text(child, "A");
+    android_view_add_child(ui, root, child);
+    frame_and_layout(ui, root, 200.f, 300.f);
+    rectf b{};
+    android_view_get_bounds(child, &b);
+    /* centered on the cross axis: (200 - 18) / 2 */
+    EXPECT_NEAR(b.x, (200.f - 18.f) / 2.f, 0.01);
+    EXPECT_NEAR(b.y, 0.0, 0.01);
+    android_ui_destroy(ui);
+}
+
+/* AOSP FrameLayout.layoutChildren (FrameLayout.java:293-296): a child with
+ * UNSPECIFIED_GRAVITY uses DEFAULT_CHILD_GRAVITY (TOP|START), never the
+ * container's gravity (FrameLayout has no container gravity). */
+static void test_frame_unspecified_default_child_gravity() {
+    android_ui_t ui = make_ui();
+    android_view_t frame = make_view(ui, ANDROID_VIEW_FRAME_LAYOUT);
+    set_match(frame);
+    android_view_set_gravity(frame, ANDROID_GRAVITY_CENTER);
+    android_view_t child = make_view(ui, ANDROID_VIEW_TEXT_VIEW);
+    set_wrap(child); /* no layout_gravity -> lp.gravity = -1 */
+    android_view_set_text(child, "A");
+    android_view_add_child(ui, frame, child);
+    frame_and_layout(ui, frame, 200.f, 300.f);
+    rectf b{};
+    android_view_get_bounds(child, &b);
+    /* DEFAULT_CHILD_GRAVITY TOP|START -> top-left */
+    EXPECT_NEAR(b.x, 0.0, 0.01);
+    EXPECT_NEAR(b.y, 0.0, 0.01);
     android_ui_destroy(ui);
 }
 
@@ -642,25 +691,299 @@ static void test_image_draw_command() {
     android_ui_destroy(ui);
 }
 
+/* LL1: the END divider in an RTL horizontal LinearLayout must be emitted even
+ * when every child is GONE — AOSP drawDividersHorizontal falls back to
+ * getPaddingLeft() when getLastNonGoneChild() == null
+ * (LinearLayout.java:497-502). The pre-fix code only handled the LTR
+ * all-GONE fallback. */
+static void test_linear_rtl_all_gone_end_divider() {
+    android_ui_t ui = make_ui();
+    android_view_t root = make_view(ui, ANDROID_VIEW_LINEAR_LAYOUT);
+    set_match(root);
+    android_view_set_orientation(root, ANDROID_HORIZONTAL);
+    android_view_set_layout_direction(root, ANDROID_LAYOUT_DIRECTION_RTL);
+    android_view_set_show_dividers(root, ANDROID_SHOW_DIVIDER_END);
+    color_rgba divider_color{0.8f, 0.8f, 0.8f, 1.f};
+    android_view_set_divider(root, 4.f, 0.f, divider_color); /* 4px thick */
+    android_view_t a = make_view(ui, ANDROID_VIEW_TEXT_VIEW, 0);
+    set_wrap(a);
+    android_view_set_text(a, "A");
+    android_view_set_visibility(a, ANDROID_GONE);
+    android_view_add_child(ui, root, a);
+    frame_and_layout(ui, root, 200.f, 100.f);
+    const std::vector<rectf>& rects = root->divider_rects;
+    EXPECT(rects.size() == 1);
+    if (rects.size() == 1) {
+        /* RTL all-GONE: position = getPaddingLeft() = 0, not the LTR
+         * width - paddingRight - thickness formula. */
+        EXPECT_NEAR(rects[0].x, 0.0, 0.01);
+        EXPECT_NEAR(rects[0].width, 4.0, 0.01);
+    }
+    android_ui_destroy(ui);
+}
+
+/* LL4: the cross-axis childSpace is NOT clamped to 0 — a CENTER child in a
+ * box whose padding exceeds its width resolves to a negative space and the
+ * child is offset (clipped) accordingly (AOSP LinearLayout.java:1667/1773). */
+static void test_linear_negative_cross_center() {
+    android_ui_t ui = make_ui(1.f); /* density 1 keeps the arithmetic exact */
+    android_view_t root = make_view(ui, ANDROID_VIEW_LINEAR_LAYOUT);
+    set_match(root);
+    android_view_set_padding_edges_dp(root, {60.f, 0.f, 60.f, 0.f});
+    android_view_t child = make_view(ui, ANDROID_VIEW_TEXT_VIEW);
+    android_layout_params_t lp{};
+    lp.width.kind = ANDROID_SIZE_KIND_EXACT; lp.width.value_dp = 10.f;
+    lp.height.kind = ANDROID_SIZE_KIND_EXACT; lp.height.value_dp = 10.f;
+    lp.gravity = ANDROID_GRAVITY_CENTER_HORIZONTAL;
+    android_view_set_layout_params(child, &lp);
+    android_view_add_child(ui, root, child);
+    frame_and_layout(ui, root, 100.f, 100.f);
+    rectf b{};
+    android_view_get_bounds(child, &b);
+    /* content_w = 100 - 60 - 60 = -20; cx = 60 + (-20 - 10) / 2 = 45. A
+     * clamp (the old bug) would give cx = 60 + (0 - 10) / 2 = 55. */
+    EXPECT_NEAR(b.width, 10.0, 0.01);
+    EXPECT_NEAR(b.x, 45.0, 0.01);
+    android_ui_destroy(ui);
+}
+
+/* RL2: RelativeLayout.getBaseline delegates to the top-start-most visible
+ * child (RelativeLayout.java:540-555, compareLayoutPosition :667-673). The
+ * container baseline equals that child's own baseline, not -1. */
+static void test_relative_baseline() {
+    android_ui_t ui = make_ui();
+    android_view_t root = make_view(ui, ANDROID_VIEW_RELATIVE_LAYOUT);
+    set_match(root);
+    android_view_t small = make_view(ui, ANDROID_VIEW_TEXT_VIEW, 1);
+    set_wrap(small);
+    android_view_set_text(small, "A");
+    android_view_set_relative_rule(small, ANDROID_RELATIVE_ALIGN_PARENT_TOP, ANDROID_RELATIVE_TRUE);
+    android_view_set_relative_rule(small, ANDROID_RELATIVE_ALIGN_PARENT_LEFT, ANDROID_RELATIVE_TRUE);
+    android_view_t big = make_view(ui, ANDROID_VIEW_TEXT_VIEW, 2);
+    set_wrap(big);
+    android_view_set_text(big, "B");
+    android_view_set_text_size_sp(big, 32.f);
+    android_view_set_relative_rule(big, ANDROID_RELATIVE_BELOW, 1);
+    android_view_set_relative_rule(big, ANDROID_RELATIVE_ALIGN_PARENT_LEFT, ANDROID_RELATIVE_TRUE);
+    android_view_add_child(ui, root, small);
+    android_view_add_child(ui, root, big);
+    frame_and_layout(ui, root, 200.f, 300.f);
+    /* small is top-start-most (top 0): its baseline (0.8 * 32 = 25.6) is the
+     * container baseline; big (top 38.4) is not selected even though its
+     * baseline (51.2) is larger. */
+    EXPECT_NEAR(root->measured_baseline, 25.6, 0.01);
+    EXPECT_NEAR(big->measured_baseline, 51.2, 0.01);
+    android_ui_destroy(ui);
+}
+
+/* CA3: a MATCH_PARENT child in a ConstraintLayout subtracts its margins in
+ * addition to the padding (widgetConstraintLayout.java:706-711). */
+static void test_constraint_match_parent_margin() {
+    android_ui_t ui = make_ui();
+    android_view_t root = make_view(ui, ANDROID_VIEW_CONSTRAINT_LAYOUT);
+    set_match(root);
+    android_view_t a = make_view(ui, ANDROID_VIEW_TEXT_VIEW, 6001);
+    android_layout_params_t lpa{};
+    lpa.width.kind = ANDROID_SIZE_KIND_MATCH_PARENT;
+    lpa.height.kind = ANDROID_SIZE_KIND_EXACT; lpa.height.value_dp = 50.f;
+    lpa.margins_dp = {20.f, 0.f, 10.f, 0.f};
+    android_view_set_layout_params(a, &lpa);
+    android_view_add_child(ui, root, a);
+    frame_and_layout(ui, root, 320.f, 640.f);
+    rectf ba{};
+    android_view_get_bounds(a, &ba);
+    /* 320 - 0 padding - (20dp + 10dp margins @ density 2 = 60) = 260. */
+    EXPECT_NEAR(ba.width, 260.0, 0.5);
+    EXPECT_NEAR(ba.x, 0.0, 0.5);
+    EXPECT_NEAR(ba.height, 100.0, 0.5);
+    android_ui_destroy(ui);
+}
+
+/* CA4: a 0dp MATCH_CONSTRAINT child is measured WRAP_CONTENT initially
+ * (widgetConstraintLayout.java:713-715), so a single-side constraint keeps
+ * its intrinsic width instead of collapsing to EXACTLY(0). */
+static void test_constraint_0dp_single_side() {
+    android_ui_t ui = make_ui();
+    android_view_t root = make_view(ui, ANDROID_VIEW_CONSTRAINT_LAYOUT);
+    set_match(root);
+    android_view_t a = make_view(ui, ANDROID_VIEW_TEXT_VIEW, 6002);
+    android_layout_params_t lpa{};
+    lpa.width.kind = ANDROID_SIZE_KIND_EXACT; lpa.width.value_dp = 0.f; /* 0dp -> MATCH_CONSTRAINT */
+    lpa.height.kind = ANDROID_SIZE_KIND_WRAP_CONTENT;
+    android_view_set_layout_params(a, &lpa);
+    android_view_set_text(a, "Hi");
+    android_view_add_constraint(a, -1, ANDROID_CONSTRAINT_LEFT, ANDROID_CONSTRAINT_LEFT, 0);
+    android_view_add_constraint(a, -1, ANDROID_CONSTRAINT_TOP, ANDROID_CONSTRAINT_TOP, 0);
+    android_view_add_child(ui, root, a);
+    frame_and_layout(ui, root, 320.f, 640.f);
+    rectf ba{};
+    android_view_get_bounds(a, &ba);
+    /* Single-side MATCH_CONSTRAINT -> d = max(min, dimension) with dimension
+     * the measured WRAP width ("Hi" = ceil(2*17.92) = 36). EXACTLY(0) (the
+     * old bug) would collapse it to 0. */
+    EXPECT_NEAR(ba.width, 36.0, 0.5);
+    EXPECT_NEAR(ba.x, 0.0, 0.5);
+    android_ui_destroy(ui);
+}
+
+/* CA5: matchConstraintMinWidth is already in PIXELS in AOSP
+ * (widgetConstraintLayout.java:1506-1511, getDimensionPixelSize). The port
+ * stores dp, so 40dp must reach the solver as 80px at density 2. */
+static void test_constraint_match_min_px() {
+    android_ui_t ui = make_ui();
+    android_view_t root = make_view(ui, ANDROID_VIEW_CONSTRAINT_LAYOUT);
+    set_match(root);
+    android_view_t a = make_view(ui, ANDROID_VIEW_TEXT_VIEW, 6003);
+    android_layout_params_t lpa{};
+    lpa.width.kind = ANDROID_SIZE_KIND_EXACT; lpa.width.value_dp = 0.f; /* MATCH_CONSTRAINT */
+    lpa.height.kind = ANDROID_SIZE_KIND_EXACT; lpa.height.value_dp = 20.f;
+    android_view_set_layout_params(a, &lpa);
+    android_view_set_constraint_match_style(a, ANDROID_CONSTRAINT_MATCH_SPREAD,
+                                            ANDROID_CONSTRAINT_MATCH_SPREAD,
+                                            40.f, 0.f, 0.f, 0.f);
+    android_view_add_constraint(a, -1, ANDROID_CONSTRAINT_LEFT, ANDROID_CONSTRAINT_LEFT, 0);
+    android_view_add_constraint(a, -1, ANDROID_CONSTRAINT_TOP, ANDROID_CONSTRAINT_TOP, 0);
+    android_view_add_child(ui, root, a);
+    frame_and_layout(ui, root, 320.f, 640.f);
+    rectf ba{};
+    android_view_get_bounds(a, &ba);
+    /* Single-side MATCH_CONSTRAINT: d = max(min, dimension). Empty text wraps
+     * to 0, so the 40dp min (80px, not 40px raw) is binding. */
+    EXPECT_NEAR(ba.width, 80.0, 0.5);
+    android_ui_destroy(ui);
+}
+
+/* LL5: in RTL the BEGINNING divider sits to the RIGHT of the first non-GONE
+ * child (child.getRight() + rightMargin, LinearLayout.java:481-489). The
+ * pre-fix RTL loop only emitted MIDDLE/END rects to the LEFT of each child, so
+ * the BEGINNING rect was never produced. */
+static void test_linear_rtl_beginning_divider() {
+    android_ui_t ui = make_ui(1.f); /* density 1 keeps the arithmetic exact */
+    android_view_t root = make_view(ui, ANDROID_VIEW_LINEAR_LAYOUT);
+    set_match(root);
+    android_view_set_orientation(root, ANDROID_HORIZONTAL);
+    android_view_set_layout_direction(root, ANDROID_LAYOUT_DIRECTION_RTL);
+    android_view_set_show_dividers(root, ANDROID_SHOW_DIVIDER_BEGINNING |
+                                          ANDROID_SHOW_DIVIDER_MIDDLE |
+                                          ANDROID_SHOW_DIVIDER_END);
+    color_rgba divider_color{0.8f, 0.8f, 0.8f, 1.f};
+    android_view_set_divider(root, 4.f, 0.f, divider_color); /* 4px thick */
+    android_view_t a = make_view(ui, ANDROID_VIEW_TEXT_VIEW, 0);
+    android_view_t b = make_view(ui, ANDROID_VIEW_TEXT_VIEW, 0);
+    set_wrap(a); set_wrap(b);
+    android_view_set_text(a, "A");
+    android_view_set_text(b, "B");
+    android_view_add_child(ui, root, a);
+    android_view_add_child(ui, root, b);
+    frame_and_layout(ui, root, 200.f, 100.f);
+    const std::vector<rectf>& rects = root->divider_rects;
+    /* 3 dividers: END (far left, before the last child), MIDDLE (between the
+     * two children) and BEGINNING (far right, after the first child). */
+    EXPECT(rects.size() == 3);
+    if (rects.size() == 3) {
+        EXPECT_NEAR(rects[0].x, 170.0, 0.01); /* END at b.getLeft() - 4 = 170 */
+        EXPECT_NEAR(rects[1].x, 183.0, 0.01); /* MIDDLE between b and a */
+        EXPECT_NEAR(rects[2].x, 196.0, 0.01); /* BEGINNING at a.getRight() = 196 */
+    }
+    android_ui_destroy(ui);
+}
+
+/* FS2: an empty ScrollView must clamp mScrollY to 0 and reset the scroll
+ * metrics (AOSP onLayout: childHeight = 0 -> scrollRange = 0,
+ * ScrollView.java:1857-1870); the pre-fix layout returned early leaving stale
+ * overflow and a clamped-but-unapplied offset. */
+static void test_scroll_view_empty_resets_metrics() {
+    android_ui_t ui = make_ui();
+    android_view_t scroll = make_view(ui, ANDROID_VIEW_SCROLL_VIEW);
+    set_match(scroll);
+    android_view_set_scroll_offset(scroll, 0.f, 100.f);
+    frame_and_layout(ui, scroll, 200.f, 300.f);
+    scroll_metrics_t metrics = android_view_get_scroll_metrics(scroll);
+    EXPECT_NEAR(metrics.scrollable_overflow_y, 0.0, 0.01);
+    EXPECT_NEAR(metrics.scrollable_overflow_x, 0.0, 0.01);
+    EXPECT_NEAR(metrics.scroll_offset_y, 0.0, 0.01);
+    EXPECT_NEAR(metrics.scroll_offset_x, 0.0, 0.01);
+    EXPECT_NEAR(scroll->scroll_y, 0.0, 0.01);
+    android_ui_destroy(ui);
+}
+
+/* MC3: a GONE barrier still exists as a widget in the graph (helpers are added
+ * always, widgetConstraintLayout.java:1296) so a child constraining to it
+ * resolves the connection instead of dropping it. */
+static void test_constraint_gone_barrier() {
+    android_ui_t ui = make_ui();
+    android_view_t root = make_view(ui, ANDROID_VIEW_CONSTRAINT_LAYOUT);
+    set_match(root);
+
+    android_view_t a = make_view(ui, ANDROID_VIEW_TEXT_VIEW, 7001);
+    android_layout_params_t lpa{};
+    lpa.width.kind = ANDROID_SIZE_KIND_EXACT; lpa.width.value_dp = 100.f;
+    lpa.height.kind = ANDROID_SIZE_KIND_EXACT; lpa.height.value_dp = 50.f;
+    android_view_set_layout_params(a, &lpa);
+    android_view_add_constraint(a, -1, ANDROID_CONSTRAINT_LEFT, ANDROID_CONSTRAINT_LEFT, 0);
+    android_view_add_constraint(a, -1, ANDROID_CONSTRAINT_TOP, ANDROID_CONSTRAINT_TOP, 0);
+
+    android_view_t barrier = make_view(ui, ANDROID_VIEW_BARRIER, 7002);
+    android_view_set_barrier_type(barrier, ANDROID_BARRIER_RIGHT);
+    android_view_set_barrier_margin(barrier, 10.f);
+    android_view_add_barrier_reference(barrier, 7001);
+    android_view_set_visibility(barrier, ANDROID_GONE);
+
+    android_view_t b = make_view(ui, ANDROID_VIEW_TEXT_VIEW, 7003);
+    android_layout_params_t lpb{};
+    lpb.width.kind = ANDROID_SIZE_KIND_EXACT; lpb.width.value_dp = 100.f;
+    lpb.height.kind = ANDROID_SIZE_KIND_EXACT; lpb.height.value_dp = 50.f;
+    android_view_set_layout_params(b, &lpb);
+    android_view_add_constraint(b, 7002, ANDROID_CONSTRAINT_LEFT, ANDROID_CONSTRAINT_LEFT, 0);
+    android_view_add_constraint(b, -1, ANDROID_CONSTRAINT_TOP, ANDROID_CONSTRAINT_TOP, 0);
+
+    android_view_add_child(ui, root, a);
+    android_view_add_child(ui, root, barrier);
+    android_view_add_child(ui, root, b);
+    frame_and_layout(ui, root, 320.f, 640.f);
+
+    rectf ba{}, bb{}, br{};
+    android_view_get_bounds(a, &ba);
+    android_view_get_bounds(b, &bb);
+    android_view_get_bounds(barrier, &br);
+    EXPECT_NEAR(ba.x, 0.0, 0.5);
+    /* The GONE barrier is still solved at A.right + margin (20px) and B keeps
+     * its pin; a dropped connection (the old skip) would leave B at x = 0. */
+    EXPECT_NEAR(br.x, 220.0, 0.5);
+    EXPECT_NEAR(bb.x, 220.0, 0.5);
+    android_ui_destroy(ui);
+}
+
 int main() {
     test_frame_gravity_bottom_right();
     test_frame_gravity_center();
+    test_linear_unspecified_gravity_inherits_container();
+    test_frame_unspecified_default_child_gravity();
     test_linear_margin_flow();
     test_linear_horizontal_gravity();
     test_linear_horizontal_baseline_alignment();
     test_linear_rtl();
+    test_linear_rtl_all_gone_end_divider();
+    test_linear_rtl_beginning_divider();
     test_linear_dividers();
     test_linear_largest_child();
     test_linear_default_margins();
+    test_linear_negative_cross_center();
     test_relative_anchors();
     test_relative_dependency_order();
+    test_relative_baseline();
     test_scroll_view();
+    test_scroll_view_empty_resets_metrics();
     test_hit_test();
     test_constraint_layout_centering();
     test_constraint_layout_relative();
     test_constraint_layout_ratio();
     test_constraint_layout_barrier();
     test_constraint_layout_start_end();
+    test_constraint_match_parent_margin();
+    test_constraint_0dp_single_side();
+    test_constraint_match_min_px();
+    test_constraint_gone_barrier();
     test_image_adjust_view_bounds();
     test_image_max_width();
     test_image_center_crop_geometry();

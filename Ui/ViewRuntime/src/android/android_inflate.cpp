@@ -199,6 +199,43 @@ void apply_style_chain(android_ui_s* ui, android_view_s* view,
     apply_style_bag(ui, view, attrs, count);
 }
 
+/* Resolve a style reference to a concrete style id (defined below). */
+bool resolve_style_id(const android_ui_s* ui, const android_raw_value_t& v,
+                      uint32_t* out);
+
+/* ── Default style attributes (defStyleAttr) ─────────────────────────
+ *
+ * AOSP widget constructors pass a defStyleAttr (e.g. Button ->
+ * com.android.internal.R.attr.buttonStyle) to obtainStyledAttributes: the
+ * widget's default style comes from the THEME via that attribute, NOT only
+ * from an explicit style= in the XML. We resolve the same framework attr id
+ * against the active theme and apply the resulting style chain before the
+ * XML's explicit attributes win.
+ *
+ * Only ids VERIFIED against real data are enabled here (reverse-engineered,
+ * never guessed): textViewStyle = 0x01010018 was confirmed from the real
+ * inflate serializer's resource map. The other classes stay disabled (0)
+ * until their ids are verified the same way — an unverified id is a bug. */
+
+uint32_t class_def_style_attr(android_view_class_t cls) {
+    switch (cls) {
+        case ANDROID_VIEW_TEXT_VIEW:    return 0x01010018; /* textViewStyle (verified) */
+        default:                        return 0;
+    }
+}
+
+void apply_def_style_attr(android_ui_s* ui, android_view_s* view) {
+    const uint32_t attr_id = class_def_style_attr(view->cls);
+    if (attr_id == 0) return;
+    /* The theme's value for the default-style attribute is itself a style
+     * reference; resolve it and apply its chain (parents first). */
+    android_raw_value_t def{};
+    if (!resolve_theme_attr(ui, attr_id, &def)) return;
+    uint32_t style_id = 0;
+    if (!resolve_style_id(ui, def, &style_id) || style_id == 0) return;
+    apply_style_chain(ui, view, style_id);
+}
+
 /* ── Drawables ────────────────────────────────────────────────────────
  *
  * A drawable (shape/selector XML) is structurally a bag of attributes with
@@ -374,9 +411,28 @@ bool size_from_raw(const android_ui_s* ui, const android_raw_value_t& v,
         }
         return false;
     }
+    if (v.kind == ANDROID_RAW_TYPE_INT_DEC) {
+        /* AXML binary encodes layout_width/layout_height special constants as
+         * typed integers, NOT strings: MATCH_PARENT = -1, WRAP_CONTENT = -2
+         * (ViewGroup.LayoutParams, ViewGroup.java:8312/8319). The old code
+         * only matched the STRING forms, so every wrap/match child fell into
+         * the EXACT branch and measured 0x0. */
+        if (v.int_value == -1) {
+            out->kind = ANDROID_SIZE_KIND_MATCH_PARENT;
+            out->value_dp = 0.f;
+            return true;
+        }
+        if (v.int_value == -2) {
+            out->kind = ANDROID_SIZE_KIND_WRAP_CONTENT;
+            out->value_dp = 0.f;
+            return true;
+        }
+        out->kind = ANDROID_SIZE_KIND_EXACT;
+        out->value_dp = dim_to_dp(ui, v);
+        return true;
+    }
     if (v.kind == ANDROID_RAW_TYPE_DIMENSION ||
-        v.kind == ANDROID_RAW_TYPE_FLOAT ||
-        v.kind == ANDROID_RAW_TYPE_INT_DEC) {
+        v.kind == ANDROID_RAW_TYPE_FLOAT) {
         out->kind = ANDROID_SIZE_KIND_EXACT;
         out->value_dp = dim_to_dp(ui, v);
         return true;
@@ -561,6 +617,25 @@ bool apply_attr(android_ui_s* ui, android_view_s* view,
         }
         return false;
     }
+    if (std::strcmp(name, "textStyle") == 0) {
+        /* Typeface.BOLD = 1, Typeface.ITALIC = 2 (TextView.setTypefaceFromAttrs
+         * computes `need = style & ~typefaceStyle` and applies
+         * setFakeBoldText((need & Typeface.BOLD) != 0), TextView.java:2549-2551).
+         * The runtime models the BOLD bit; ITALIC stays out of scope. */
+        int32_t style = 0;
+        if (!int_from_raw(v, &style)) return false;
+        view->text_bold = (style & 1) != 0;
+        return true;
+    }
+    if (std::strcmp(name, "textColorLink") == 0) {
+        color_rgba c{};
+        if (resolve_color(ui, v, &c)) {
+            view->text_color_link = c;
+            view->has_text_color_link = true;
+            return true;
+        }
+        return false;
+    }
     if (std::strcmp(name, "singleLine") == 0) {
         return bool_from_raw(v, &view->single_line);
     }
@@ -678,6 +753,14 @@ API void android_ui_set_resource_bridge(
 API void android_ui_set_surface(android_ui_t ui, void* surface) {
     if (!ui) return;
     ui->surface = surface;
+    /* Order-independent font propagation: if the session font was installed
+     * before the surface was registered, push the same bytes now so paint
+     * renders real glyphs (android_ui_set_font also pushes when the surface
+     * already exists). */
+    if (surface && ui->font_data && ui->font_data_size > 0) {
+        viewruntime_surface_set_font(surface, ui->font_data,
+                                     static_cast<int32_t>(ui->font_data_size));
+    }
 }
 
 API status_t android_ui_inflate(
@@ -747,9 +830,12 @@ API status_t android_ui_inflate(
             }
         }
     }
-    /* Pass 3b: apply inherited style chains (parents first, derived wins). */
+    /* Pass 3b: apply the class default style from the theme (AOSP
+     * defStyleAttr, e.g. Button -> ?attr/buttonStyle) first, then the
+     * explicit style= chain — the explicit style wins over the default. */
     for (int32_t i = 0; i < node_count; ++i) {
         android_view_s* view = created[static_cast<size_t>(i)];
+        viewruntime::android::apply_def_style_attr(ui, view);
         if (view->style_id != 0) {
             viewruntime::android::apply_style_chain(ui, view, view->style_id);
         }
@@ -796,6 +882,13 @@ API status_t android_view_get_text(android_view_t view, const char** out_text) {
 API status_t android_view_get_text_color(android_view_t view, color_rgba* out_color) {
     if (!view || !out_color) return ERROR_NULL_ARG;
     *out_color = view->text_color;
+    return OK;
+}
+
+API status_t android_view_get_text_color_link(android_view_t view, color_rgba* out_color) {
+    if (!view || !out_color) return ERROR_NULL_ARG;
+    if (!view->has_text_color_link) return ERROR_INVALID_STATE;
+    *out_color = view->text_color_link;
     return OK;
 }
 

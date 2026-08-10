@@ -5,6 +5,8 @@
 
 #include <viewruntime/viewruntime_backend.h>
 
+#include <algorithm>
+
 static const char* find_system_font() {
     static const char* candidates[] = {
         "C:\\Windows\\Fonts\\segoeui.ttf",
@@ -64,7 +66,7 @@ static void test_draw_text_paints_pixels() {
     viewruntime_frame_begin(surface);
     const uint16_t text[] = {'H', 'e', 'l', 'l', 'o'};
     viewruntime_draw_text(surface, 10.f, 10.f, 180.f, 40.f, text, 5, 28.f,
-                          255, 0, 0, 0, 7);
+                          255, 0, 0, 0, 7, TEXT_ALIGN_LEFT, 0);
     viewruntime_frame_end(surface);
 
     const uint8_t* px = nullptr;
@@ -194,6 +196,79 @@ static void test_draw_image_cropped() {
     viewruntime_surface_destroy(surface);
 }
 
+static void test_draw_text_alignment_and_bold() {
+    const char* font_path = find_system_font();
+    if (!font_path) return; /* no font available: skip silently */
+
+    /* Wide empty box; "AB" is narrow. LEFT draws near x=0, CENTER draws in
+     * the middle — the x-range of painted pixels must shift right. */
+    const uint16_t text[] = {'A', 'B'};
+
+    void* surface = viewruntime_surface_create(font_path);
+    EXPECT(surface != nullptr);
+    viewruntime_surface_resize(surface, 300, 60, 1.f);
+
+    int left_min = 999, left_max = -1;
+    {
+        viewruntime_frame_begin(surface);
+        viewruntime_draw_text(surface, 10.f, 10.f, 280.f, 40.f, text, 2, 24.f,
+                              255, 0, 0, 0, 1, TEXT_ALIGN_LEFT, 0);
+        viewruntime_frame_end(surface);
+        const uint8_t* px = nullptr;
+        int pitch = 0, w = 0, h = 0;
+        viewruntime_surface_pixels(surface, &px, &pitch, &w, &h);
+        for (int y = 10; y < 50; ++y)
+            for (int x = 10; x < 290; ++x)
+                if (px[y * pitch + x * 4 + 3] != 0) {
+                    left_min = std::min(left_min, x);
+                    left_max = std::max(left_max, x);
+                }
+    }
+
+    int center_min = 999, center_max = -1;
+    int center_painted = 0;
+    {
+        viewruntime_frame_begin(surface);
+        viewruntime_draw_text(surface, 10.f, 10.f, 280.f, 40.f, text, 2, 24.f,
+                              255, 0, 0, 0, 1, TEXT_ALIGN_CENTER, 0);
+        viewruntime_frame_end(surface);
+        const uint8_t* px = nullptr;
+        int pitch = 0, w = 0, h = 0;
+        viewruntime_surface_pixels(surface, &px, &pitch, &w, &h);
+        for (int y = 10; y < 50; ++y)
+            for (int x = 10; x < 290; ++x)
+                if (px[y * pitch + x * 4 + 3] != 0) {
+                    center_min = std::min(center_min, x);
+                    center_max = std::max(center_max, x);
+                    center_painted++;
+                }
+    }
+
+    /* CENTER must shift the run right of the LEFT position (Layout.java:1209). */
+    EXPECT(center_min > left_min);
+    /* and it must not hug the left edge: in a 280px box with a ~24px run the
+     * centered start is roughly (280 - run_w)/2, far from x=10. */
+    EXPECT(center_min > 40);
+
+    /* Bold renders a second +1px pass: strictly more painted pixels. */
+    int bold_painted = 0;
+    {
+        viewruntime_frame_begin(surface);
+        viewruntime_draw_text(surface, 10.f, 10.f, 280.f, 40.f, text, 2, 24.f,
+                              255, 0, 0, 0, 1, TEXT_ALIGN_LEFT, 1);
+        viewruntime_frame_end(surface);
+        const uint8_t* px = nullptr;
+        int pitch = 0, w = 0, h = 0;
+        viewruntime_surface_pixels(surface, &px, &pitch, &w, &h);
+        for (int y = 10; y < 50; ++y)
+            for (int x = 10; x < 290; ++x)
+                if (px[y * pitch + x * 4 + 3] != 0) bold_painted++;
+    }
+    EXPECT(bold_painted > center_painted);
+
+    viewruntime_surface_destroy(surface);
+}
+
 int main() {
     test_fill_rect_pixels();
     test_draw_text_paints_pixels();
@@ -201,5 +276,6 @@ int main() {
     test_resize_clears();
     test_draw_image_scaled();
     test_draw_image_cropped();
+    test_draw_text_alignment_and_bold();
     return test_result();
 }

@@ -18,7 +18,15 @@ add_library(viewruntime_core SHARED
     src/css/color_rgba.cpp
     src/android/android_views.cpp
     src/android/android_inflate.cpp
-    src/android/android_measure_layout.cpp
+    src/android/measure_core.cpp
+    src/android/text_view.cpp
+    src/android/image_view.cpp
+    src/android/progress_bar.cpp
+    src/android/linear_layout.cpp
+    src/android/frame_layout.cpp
+    src/android/relative_layout.cpp
+    src/android/scroll_view.cpp
+    src/android/constraint_layout.cpp
     src/android/android_list.cpp
     src/android/constraint_solver.cpp
     src/android/constraint_widget.cpp
@@ -119,7 +127,7 @@ if(VIEWRUNTIME_BUILD_TESTS)
     add_test(NAME viewruntime.text-measurer COMMAND viewruntime_text_measurer_test)
 
     add_executable(viewruntime_backend_test tests/test_viewruntime_backend.cpp)
-    target_link_libraries(viewruntime_backend_test PRIVATE ViewRuntime::Core)
+    target_link_libraries(viewruntime_backend_test PRIVATE viewruntime_core)
     add_test(NAME viewruntime.backend COMMAND viewruntime_backend_test)
 endif()
 

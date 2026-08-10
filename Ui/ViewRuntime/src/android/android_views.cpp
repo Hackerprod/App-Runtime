@@ -28,10 +28,11 @@ android_text_metrics_t measure_text(
 void apply_class_defaults(android_view_s* view) {
     switch (view->cls) {
         case ANDROID_VIEW_LINEAR_LAYOUT:
-            /* AOSP LinearLayout default gravity is START|TOP; for LTR that
-             * resolves to LEFT|TOP. It is a container property, independent
-             * of the children's LayoutParams. */
-            view->gravity = ANDROID_GRAVITY_LEFT | ANDROID_GRAVITY_TOP;
+            /* AOSP LinearLayout default gravity is START|TOP (the relative
+             * bit, NOT a pre-resolved LEFT). Layout resolves it per direction
+             * via getAbsoluteGravity (LinearLayout.java:1786): LEFT for LTR,
+             * RIGHT for RTL. */
+            view->gravity = ANDROID_GRAVITY_START | ANDROID_GRAVITY_TOP;
             break;
         case ANDROID_VIEW_GRID_LAYOUT:
             /* AOSP GridLayout defaults to HORIZONTAL orientation. */
@@ -594,6 +595,8 @@ API status_t android_view_set_relative_rule(
         return ERROR_INVALID_STATE;
     }
     view->relative_rules[verb] = target_id;
+    /* keep the mInitialRules snapshot in sync (AOSP RelativeLayout.java:1553) */
+    view->relative_rules_initial[verb] = target_id;
     return OK;
 }
 
