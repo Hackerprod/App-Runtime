@@ -33,9 +33,18 @@ VIEWRUNTIME_BACKEND_API void  viewruntime_surface_resize(
 
 /* Frame lifecycle. Draw calls paint in order, later over earlier. */
 VIEWRUNTIME_BACKEND_API void viewruntime_frame_begin(void* surface);
+VIEWRUNTIME_BACKEND_API void viewruntime_clip_push(
+    void* surface, float x, float y, float w, float h);
+VIEWRUNTIME_BACKEND_API void viewruntime_clip_pop(void* surface);
 VIEWRUNTIME_BACKEND_API void viewruntime_draw_fill_rect(
     void* surface, float x, float y, float w, float h,
     uint8_t a, uint8_t r, uint8_t g, uint8_t b, int32_t view_id);
+/* Rounded-rect fill. radius_px clamps to min(radius, min(w,h)*0.5) exactly
+ * like AOSP GradientDrawable.draw (GradientDrawable.java:823-825); 0 = square
+ * (identical to viewruntime_draw_fill_rect). */
+VIEWRUNTIME_BACKEND_API void viewruntime_draw_fill_rounded_rect(
+    void* surface, float x, float y, float w, float h,
+    float radius_px, uint8_t a, uint8_t r, uint8_t g, uint8_t b, int32_t view_id);
 VIEWRUNTIME_BACKEND_API void viewruntime_draw_text(
     void* surface, float x, float y, float w, float h,
     const uint16_t* utf16_text, int32_t text_len,

@@ -107,6 +107,8 @@ public sealed class AndroidResourceQueryService
     /// — a &lt;gradient android:startColor&gt; (GradientDrawable) exposed as an
     ///   attribute named <c>startColor</c> with the same default-vs-state rules
     ///   (ViewRuntime uses it as the fallback when the bag has no color/solid);
+    /// — a &lt;corners android:radius&gt; exposed as an attribute named
+    ///   <c>radius</c> (a raw dimension) with the same default-vs-state rules;
     /// — PLUS one attribute per item/solid with a recognized state specifier:
     ///   <c>android:state_pressed="true"</c> -> attr named <c>state_pressed</c>,
     ///   <c>android:state_hovered="true"</c> -> attr named <c>state_hovered</c>
@@ -121,22 +123,28 @@ public sealed class AndroidResourceQueryService
         AndroidInflateAttribute? itemFallback = null;
         AndroidInflateAttribute? gradientDefault = null;
         AndroidInflateAttribute? gradientAny = null;
+        AndroidInflateAttribute? cornersDefault = null;
+        AndroidInflateAttribute? cornersAny = null;
         var stateColors = new List<AndroidInflateAttribute>();
-        Walk(element, nearestItemHasState: null, nearestItemState: null, ref solidDefault, ref solidAny, ref itemDefault, ref itemFallback, ref gradientDefault, ref gradientAny, stateColors);
+        Walk(element, nearestItemHasState: null, nearestItemState: null, ref solidDefault, ref solidAny, ref itemDefault, ref itemFallback, ref gradientDefault, ref gradientAny, ref cornersDefault, ref cornersAny, stateColors);
         // Priority: default-state solid fill (the real background) >
         // ColorStateList default item > any solid > any item > gradient
         // startColor (GradientDrawable fallback).
         AndroidInflateAttribute? color = solidDefault ?? itemDefault ?? solidAny ?? itemFallback;
         AndroidInflateAttribute? startColor = gradientDefault ?? gradientAny;
+        AndroidInflateAttribute? radius = cornersDefault ?? cornersAny;
+        // radius alone is not a paintable bag (a shape with corners but no fill
+        // draws nothing) — the bag stays null until some color is present.
         if (color is null && startColor is null && stateColors.Count == 0) return null;
-        var bag = new List<AndroidInflateAttribute>(stateColors.Count + 2);
+        var bag = new List<AndroidInflateAttribute>(stateColors.Count + 3);
         if (color is not null) bag.Add(color);
         if (startColor is not null) bag.Add(startColor);
+        if (radius is not null) bag.Add(radius);
         bag.AddRange(stateColors);
         return bag.ToArray();
     }
 
-    private static void Walk(AndroidXmlElement element, bool? nearestItemHasState, AndroidXmlAttribute? nearestItemState, ref AndroidInflateAttribute? solidDefault, ref AndroidInflateAttribute? solidAny, ref AndroidInflateAttribute? itemDefault, ref AndroidInflateAttribute? itemFallback, ref AndroidInflateAttribute? gradientDefault, ref AndroidInflateAttribute? gradientAny, List<AndroidInflateAttribute> stateColors)
+    private static void Walk(AndroidXmlElement element, bool? nearestItemHasState, AndroidXmlAttribute? nearestItemState, ref AndroidInflateAttribute? solidDefault, ref AndroidInflateAttribute? solidAny, ref AndroidInflateAttribute? itemDefault, ref AndroidInflateAttribute? itemFallback, ref AndroidInflateAttribute? gradientDefault, ref AndroidInflateAttribute? gradientAny, ref AndroidInflateAttribute? cornersDefault, ref AndroidInflateAttribute? cornersAny, List<AndroidInflateAttribute> stateColors)
     {
         // Track the NEAREST ancestor <item>: whether it has any state spec
         // (for default-vs-fallback priority) and its recognized state attribute
@@ -178,9 +186,21 @@ public sealed class AndroidResourceQueryService
             itemFallback ??= itemColor;
             if (currentItemStateAttr is not null) stateColors.Add(NamedStateColor(itemColor, currentItemStateAttr));
         }
+        // <corners android:radius>: rounded-corner geometry, a sibling of
+        // <solid> inside <shape>. Exposed as "radius" (a raw dimension — the
+        // generic TryNamedAttribute handles it) with the same default-vs-state
+        // rules as the color branches.
+        else if (element.Name == "corners" &&
+                 TryNamedAttribute(element, "radius", out AndroidInflateAttribute? cornerRadius) &&
+                 cornerRadius is not null)
+        {
+            if (currentItemState == false && cornersDefault is null) cornersDefault = cornerRadius;
+            cornersAny ??= cornerRadius;
+            if (currentItemStateAttr is not null) stateColors.Add(NamedStateColor(cornerRadius, currentItemStateAttr));
+        }
 
         foreach (AndroidXmlElement child in element.Children)
-            Walk(child, currentItemState, currentItemStateAttr, ref solidDefault, ref solidAny, ref itemDefault, ref itemFallback, ref gradientDefault, ref gradientAny, stateColors);
+            Walk(child, currentItemState, currentItemStateAttr, ref solidDefault, ref solidAny, ref itemDefault, ref itemFallback, ref gradientDefault, ref gradientAny, ref cornersDefault, ref cornersAny, stateColors);
     }
 
     /// <summary>Repackages a color attribute as the selector state entry: same

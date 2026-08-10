@@ -254,6 +254,7 @@ void apply_def_style_attr(android_ui_s* ui, android_view_s* view) {
 bool resolve_color(const android_ui_s* ui, const android_raw_value_t& v,
                    color_rgba* out,
                    android_view_class_t ctx = ANDROID_VIEW_VIEW); /* fwd */
+float dim_to_dp(const android_ui_s* ui, const android_raw_value_t& v); /* fwd */
 /* Resolve a drawable/ColorStateList bag to a solid color. The bag comes from
  * App Runtime's resolve_style channel: the stateless <item> is exposed as
  * "color", and each state-specific <item> as an attr named by its state
@@ -266,7 +267,8 @@ bool resolve_color(const android_ui_s* ui, const android_raw_value_t& v,
 bool resolve_drawable_solid(const android_ui_s* ui, uint32_t drawable_id,
                             color_rgba* out, bool pressed = false,
                             bool hovered = false,
-                            android_view_class_t ctx = ANDROID_VIEW_VIEW) {
+                            android_view_class_t ctx = ANDROID_VIEW_VIEW,
+                            float* out_corner_radius_dp = nullptr) {
     if (!ui->resolve_style) return false;
     const android_attr_t* attrs = nullptr;
     int32_t count = 0;
@@ -274,6 +276,17 @@ bool resolve_drawable_solid(const android_ui_s* ui, uint32_t drawable_id,
     if (!ui->resolve_style(drawable_id, &attrs, &count, &parent,
                            ui->bridge_data)) {
         return false;
+    }
+    /* Rounded-corner radius from the drawable's <corners android:radius>
+     * (GradientDrawable.setCornerRadius, GradientDrawable.java:302). The bag
+     * exposes it as "radius" when App Runtime walks the <corners> element. */
+    if (out_corner_radius_dp) {
+        for (int32_t i = 0; i < count; ++i) {
+            if (std::strcmp(attr_short(attrs[i].name), "radius") == 0) {
+                *out_corner_radius_dp = dim_to_dp(ui, attrs[i].value);
+                break;
+            }
+        }
     }
     const char* want = nullptr;
     if (pressed) want = "state_pressed";
@@ -643,6 +656,12 @@ bool apply_attr(android_ui_s* ui, android_view_s* view,
              * so the render pass can re-resolve per interaction state. */
             if (v.kind == ANDROID_RAW_TYPE_REFERENCE) {
                 view->background_drawable_id = v.ref_id;
+                /* Rounded-corner radius from the drawable's <corners
+                 * android:radius> (GradientDrawable.setCornerRadius,
+                 * GradientDrawable.java:302). */
+                resolve_drawable_solid(ui, v.ref_id, &c, false, false,
+                                       view->cls,
+                                       &view->background_corner_radius_dp);
             }
             return true;
         }

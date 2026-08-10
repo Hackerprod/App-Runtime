@@ -62,7 +62,31 @@ struct Surface {
     size_t font_data_size = 0;
 
     std::vector<std::pair<std::string, Image>> images; /* source -> bitmap */
+
+    /* Clip stack: viewport rectangles applied to every draw. The top entry
+     * is the intersection of all pushed rects (nested ScrollView/Frame
+     * clipping); empty = no clipping (full surface). */
+    std::vector<std::pair<int,int>> clip_min; /* (x0, y0) per level */
+    std::vector<std::pair<int,int>> clip_max; /* (x1, y1) per level */
 };
+
+/* Clamp an integer rect to the current clip stack (or the surface bounds
+ * when the stack is empty). Returns false when fully clipped out. */
+static bool apply_clip(Surface* s, int x0, int y0, int x1, int y1,
+                       int* ox0, int* oy0, int* ox1, int* oy1) {
+    int cx0 = 0, cy0 = 0, cx1 = s->width, cy1 = s->height;
+    if (!s->clip_min.empty()) {
+        const auto& mn = s->clip_min.back();
+        const auto& mx = s->clip_max.back();
+        cx0 = mn.first; cy0 = mn.second;
+        cx1 = mx.first; cy1 = mx.second;
+    }
+    x0 = std::max(x0, cx0); y0 = std::max(y0, cy0);
+    x1 = std::min(x1, cx1); y1 = std::min(y1, cy1);
+    if (x1 <= x0 || y1 <= y0) return false;
+    *ox0 = x0; *oy0 = y0; *ox1 = x1; *oy1 = y1;
+    return true;
+}
 
 static Image* find_image(Surface* s, const char* source) {
     for (auto& entry : s->images) {
@@ -117,10 +141,8 @@ static void fill_rect(Surface* s, float x, float y, float w, float h,
     const int y0 = static_cast<int>(std::floor(y));
     const int x1 = static_cast<int>(std::ceil(x + w));
     const int y1 = static_cast<int>(std::ceil(y + h));
-    const int cx0 = std::max(0, x0);
-    const int cy0 = std::max(0, y0);
-    const int cx1 = std::min(s->width, x1);
-    const int cy1 = std::min(s->height, y1);
+    int cx0, cy0, cx1, cy1;
+    if (!apply_clip(s, x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1)) return;
     for (int py = cy0; py < cy1; ++py) {
         uint32_t* row = &s->pixels[static_cast<size_t>(py) * s->width];
         for (int px = cx0; px < cx1; ++px) {
@@ -365,6 +387,35 @@ VIEWRUNTIME_BACKEND_API void viewruntime_frame_begin(void* surface) {
     Surface* s = static_cast<Surface*>(surface);
     if (!s) return;
     std::fill(s->pixels.begin(), s->pixels.end(), 0u);
+    s->clip_min.clear();
+    s->clip_max.clear();
+}
+
+/* Push a clip rect (intersected with the current top). Rects are in surface
+ * coordinates; the backend clamps to the surface bounds. */
+VIEWRUNTIME_BACKEND_API void viewruntime_clip_push(void* surface, float x, float y,
+                                                   float w, float h) {
+    Surface* s = static_cast<Surface*>(surface);
+    if (!s) return;
+    int x0 = static_cast<int>(std::floor(x));
+    int y0 = static_cast<int>(std::floor(y));
+    int x1 = static_cast<int>(std::ceil(x + w));
+    int y1 = static_cast<int>(std::ceil(y + h));
+    if (!s->clip_min.empty()) {
+        const auto& mn = s->clip_min.back();
+        const auto& mx = s->clip_max.back();
+        x0 = std::max(x0, mn.first); y0 = std::max(y0, mn.second);
+        x1 = std::min(x1, mx.first); y1 = std::min(y1, mx.second);
+    }
+    s->clip_min.emplace_back(x0, y0);
+    s->clip_max.emplace_back(x1, y1);
+}
+
+VIEWRUNTIME_BACKEND_API void viewruntime_clip_pop(void* surface) {
+    Surface* s = static_cast<Surface*>(surface);
+    if (!s || s->clip_min.empty()) return;
+    s->clip_min.pop_back();
+    s->clip_max.pop_back();
 }
 
 VIEWRUNTIME_BACKEND_API void viewruntime_draw_fill_rect(
@@ -374,6 +425,80 @@ VIEWRUNTIME_BACKEND_API void viewruntime_draw_fill_rect(
     if (!s || s->pixels.empty()) return;
     viewruntime_backend::fill_rect(s, x, y, w, h,
                                    viewruntime_backend::pack_color(a, r, g, b));
+}
+
+/* Rounded-rect fill: AOSP GradientDrawable clamps the radius to
+ * min(radius, min(w,h)*0.5) so a very wide/short rect never renders a thin
+ * ellipse (GradientDrawable.java:823-825, Skia clamps independently per axis
+ * otherwise). Rasterization: fill the interior (the axis-aligned box inset by
+ * radius) plus, per corner, only pixels whose distance from the corner center
+ * is within radius (a quarter-disc). Radius 0 is a plain rect. */
+VIEWRUNTIME_BACKEND_API void viewruntime_draw_fill_rounded_rect(
+    void* surface, float x, float y, float w, float h,
+    float radius_px, uint8_t a, uint8_t r, uint8_t g, uint8_t b,
+    int32_t /*view_id*/) {
+    Surface* s = static_cast<Surface*>(surface);
+    if (!s || s->pixels.empty()) return;
+    if (radius_px <= 0.f) {
+        viewruntime_backend::fill_rect(s, x, y, w, h,
+                                       viewruntime_backend::pack_color(a, r, g, b));
+        return;
+    }
+    const float rad = std::min(radius_px, std::min(w, h) * 0.5f);
+    const uint32_t color = viewruntime_backend::pack_color(a, r, g, b);
+    int x0 = static_cast<int>(std::floor(x));
+    int y0 = static_cast<int>(std::floor(y));
+    int x1 = static_cast<int>(std::ceil(x + w));
+    int y1 = static_cast<int>(std::ceil(y + h));
+    int cx0, cy0, cx1, cy1;
+    if (!apply_clip(s, x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1)) return;
+    const float r2 = rad * rad;
+    /* Corner centers (inset by rad from the rect edges). */
+    const float cxl = x + rad, cxr = x + w - rad;
+    const float cyt = y + rad, cyb = y + h - rad;
+    for (int py = cy0; py < cy1; ++py) {
+        uint32_t* row = &s->pixels[static_cast<size_t>(py) * s->width];
+        for (int px = cx0; px < cx1; ++px) {
+            const float fx = static_cast<float>(px) + 0.5f;
+            const float fy = static_cast<float>(py) + 0.5f;
+            /* Interior: strictly inside the inset box (all four corners
+             * inside their quarter-discs are covered by the box). */
+            if (fx >= cxl && fx <= cxr && fy >= cyt && fy <= cyb) {
+                viewruntime_backend::blend_pixel(&row[px], color);
+                continue;
+            }
+            /* Corner regions: inside the box but outside the inset box —
+             * keep pixels within radius of the corner center; the pure
+             * left/right/top/bottom edge strips (between the two corner
+             * spans) are always inside the rounded rect. */
+            if (fx < cxl) {
+                if (fy < cyt) {
+                    const float dx = fx - cxl, dy = fy - cyt;
+                    if (dx * dx + dy * dy <= r2) viewruntime_backend::blend_pixel(&row[px], color);
+                } else if (fy > cyb) {
+                    const float dx = fx - cxl, dy = fy - cyb;
+                    if (dx * dx + dy * dy <= r2) viewruntime_backend::blend_pixel(&row[px], color);
+                } else {
+                    viewruntime_backend::blend_pixel(&row[px], color);
+                }
+            } else if (fx > cxr) {
+                if (fy < cyt) {
+                    const float dx = fx - cxr, dy = fy - cyt;
+                    if (dx * dx + dy * dy <= r2) viewruntime_backend::blend_pixel(&row[px], color);
+                } else if (fy > cyb) {
+                    const float dx = fx - cxr, dy = fy - cyb;
+                    if (dx * dx + dy * dy <= r2) viewruntime_backend::blend_pixel(&row[px], color);
+                } else {
+                    viewruntime_backend::blend_pixel(&row[px], color);
+                }
+            } else {
+                /* Between the vertical corner spans: top/bottom edge strips. */
+                if (fy < cyt || fy > cyb) {
+                    viewruntime_backend::blend_pixel(&row[px], color);
+                }
+            }
+        }
+    }
 }
 
 VIEWRUNTIME_BACKEND_API void viewruntime_draw_text(

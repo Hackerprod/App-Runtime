@@ -91,13 +91,23 @@ void paint_background(const android_view_s* view, display_list_s* list,
     if (!view->has_background) return;
     color_rgba c = view->background_color;
     /* Drawable-backed backgrounds re-resolve for the current interaction
-     * state (pressed/hovered) â€” the stateless default otherwise. */
+     * state (pressed/hovered) — the stateless default otherwise. */
     if (view->background_drawable_id != 0 &&
         (view->pressed || view->hovered)) {
         color_rgba state_c{};
         if (resolve_background_for_state(ui, view, &state_c)) c = state_c;
     }
-    emit_fill_rounded_rect(list, view->bounds, zero_radii(), c);
+    /* Rounded corners from the drawable's <corners android:radius>
+     * (GradientDrawable.setCornerRadius, GradientDrawable.java:302);
+     * the backend clamps to min(radius, min(w,h)*0.5) like AOSP:823. */
+    const float r = dp(ui, view->background_corner_radius_dp);
+    corner_radii radii{};
+    if (r > 0.f) {
+        const float half = std::min(view->bounds.width, view->bounds.height) * 0.5f;
+        const float rad = std::min(r, half);
+        radii = {rad, rad, rad, rad, rad, rad, rad, rad};
+    }
+    emit_fill_rounded_rect(list, view->bounds, radii, c);
 }
 
 /* Computes the text cell (bounds minus padding) and vertical placement. */
@@ -329,14 +339,36 @@ API status_t android_ui_render(
         paint_command_t cmd{};
         if (display_list_get_command(list, i, &cmd) != OK) continue;
         switch (cmd.tag) {
+            case PAINT_PUSH_CLIP: {
+                const rectf& r = cmd.data.push_clip.rect;
+                viewruntime_clip_push(ui->surface, r.x, r.y, r.width, r.height);
+                break;
+            }
+            case PAINT_POP_CLIP: {
+                viewruntime_clip_pop(ui->surface);
+                break;
+            }
             case PAINT_FILL_ROUNDED_RECT: {
                 const color_rgba& c = cmd.data.fill_rounded_rect.color;
                 const rectf& r = cmd.data.fill_rounded_rect.rect;
-                viewruntime_draw_fill_rect(ui->surface, r.x, r.y, r.width, r.height,
-                                           static_cast<uint8_t>(c.a * 255.f),
-                                           static_cast<uint8_t>(c.r * 255.f),
-                                           static_cast<uint8_t>(c.g * 255.f),
-                                           static_cast<uint8_t>(c.b * 255.f), 0);
+                /* AOSP drawRoundRect: uniform radius per corner; the command
+                 * stores 8 values but paint uses the top-left radius and the
+                 * backend clamps like GradientDrawable.java:823-825. */
+                const float rad = cmd.data.fill_rounded_rect.radii.top_left_x;
+                if (rad > 0.f) {
+                    viewruntime_draw_fill_rounded_rect(ui->surface, r.x, r.y, r.width, r.height,
+                        rad,
+                        static_cast<uint8_t>(c.a * 255.f),
+                        static_cast<uint8_t>(c.r * 255.f),
+                        static_cast<uint8_t>(c.g * 255.f),
+                        static_cast<uint8_t>(c.b * 255.f), 0);
+                } else {
+                    viewruntime_draw_fill_rect(ui->surface, r.x, r.y, r.width, r.height,
+                        static_cast<uint8_t>(c.a * 255.f),
+                        static_cast<uint8_t>(c.r * 255.f),
+                        static_cast<uint8_t>(c.g * 255.f),
+                        static_cast<uint8_t>(c.b * 255.f), 0);
+                }
                 break;
             }
             case PAINT_DRAW_TEXT: {

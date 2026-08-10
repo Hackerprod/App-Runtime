@@ -187,6 +187,64 @@ public sealed class AndroidDrawableBagTests
         Assert.Equal(StatePressedId, bag[2].ResourceId);
     }
 
+    [Fact]
+    public void Shape_with_solid_and_corners_exposes_color_then_radius()
+    {
+        var root = new AndroidXmlElement(AndroidNs, "shape", 1, []);
+        root.MutableChildren.Add(new AndroidXmlElement(AndroidNs, "solid", 2, [Color("color", 0xFF336699)]));
+        root.MutableChildren.Add(new AndroidXmlElement(AndroidNs, "corners", 3,
+        [
+            new(AndroidNs, "radius", 0x010101A8, null, AndroidResourceValue.Dimension(0x00001201)) // 18dp encoded
+        ]));
+
+        AndroidInflateAttribute[]? bag = AndroidResourceQueryService.FindDrawableBag(root);
+
+        Assert.NotNull(bag);
+        Assert.Equal(2, bag!.Length);
+        Assert.Equal("color", bag[0].Name);
+        Assert.Equal("radius", bag[1].Name);
+        Assert.Equal(AndroidRawValueKind.Dimension, bag[1].Value.Kind);
+        Assert.True(Math.Abs(bag[1].Value.FloatValue - 18f) < 0.001f, $"decoded={bag[1].Value.FloatValue}");
+        Assert.Equal(1, bag[1].Value.Unit); // android_dimen_unit_t: dp
+        Assert.Equal(0x010101A8u, bag[1].ResourceId);
+    }
+
+    [Fact]
+    public void Corners_without_any_fill_keeps_the_bag_null()
+    {
+        var root = new AndroidXmlElement(AndroidNs, "shape", 1, []);
+        root.MutableChildren.Add(new AndroidXmlElement(AndroidNs, "corners", 2,
+        [
+            new(AndroidNs, "radius", 0x010101A8, null, AndroidResourceValue.Dimension(0x00001201))
+        ]));
+
+        // A shape with corners but no fill paints nothing — no color bag.
+        Assert.Null(AndroidResourceQueryService.FindDrawableBag(root));
+    }
+
+    [Fact]
+    public void Corners_inside_state_item_follows_state_symmetry()
+    {
+        var root = new AndroidXmlElement(null, "selector", 1, []);
+        var pressedItem = new AndroidXmlElement(AndroidNs, "item", 2, [State("state_pressed", true)]);
+        var shape = new AndroidXmlElement(AndroidNs, "shape", 3, []);
+        shape.MutableChildren.Add(new AndroidXmlElement(AndroidNs, "corners", 4,
+        [
+            new(AndroidNs, "radius", 0x010101A8, null, AndroidResourceValue.Dimension(0x00002001))
+        ]));
+        pressedItem.MutableChildren.Add(shape);
+        root.MutableChildren.Add(pressedItem);
+        root.MutableChildren.Add(Item(5, [Color("color", 0xFF00FF00)]));
+
+        AndroidInflateAttribute[]? bag = AndroidResourceQueryService.FindDrawableBag(root);
+
+        Assert.NotNull(bag);
+        Assert.Equal(3, bag!.Length); // color + radius-fallback + state_pressed
+        Assert.Equal("state_pressed", bag[2].Name);
+        Assert.Equal(AndroidRawValueKind.Dimension, bag[2].Value.Kind);
+        Assert.Equal(StatePressedId, bag[2].ResourceId);
+    }
+
     private static AndroidXmlElement Item(int line, AndroidXmlAttribute[] attributes) =>
         new(AndroidNs, "item", line, attributes);
 

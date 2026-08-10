@@ -79,6 +79,11 @@ struct android_view_s {
      * directly). When non-zero, the render pass re-resolves the color from
      * the drawable's ColorStateList/selector honoring pressed/hovered. */
     uint32_t background_drawable_id = 0;
+    /* Rounded-corner radius (dp) from the drawable's <corners android:radius>
+     * (GradientDrawable.setCornerRadius, GradientDrawable.java:302). 0 = square.
+     * The render clamps it to min(radius, min(w,h)*0.5) like AOSP
+     * (GradientDrawable.java:823-825). */
+    float background_corner_radius_dp = 0.f;
     /* Interaction visual state, set by the host (android_view_set_pressed /
      * android_view_set_hovered). Only affects background resolution. */
     bool pressed = false;

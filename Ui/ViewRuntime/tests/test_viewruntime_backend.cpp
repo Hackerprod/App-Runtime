@@ -269,6 +269,122 @@ static void test_draw_text_alignment_and_bold() {
     viewruntime_surface_destroy(surface);
 }
 
+/* Rounded rect: AOSP GradientDrawable clamps radius to min(r, min(w,h)/2)
+ * (GradientDrawable.java:823-825). A 20x20 box with radius 5 must leave the
+ * 4 corner pixels transparent while a plain rect fills them. */
+static void test_draw_rounded_rect_corners() {
+    void* surface = viewruntime_surface_create(nullptr);
+    EXPECT(surface != nullptr);
+    viewruntime_surface_resize(surface, 24, 24, 1.f);
+
+    viewruntime_frame_begin(surface);
+    viewruntime_draw_fill_rounded_rect(surface, 2.f, 2.f, 20.f, 20.f, 5.f,
+                                       255, 255, 0, 0, 1);
+    viewruntime_frame_end(surface);
+    const uint8_t* px = nullptr;
+    int pitch = 0, w = 0, h = 0;
+    viewruntime_surface_pixels(surface, &px, &pitch, &w, &h);
+    auto alpha_at = [&](int x, int y) -> int {
+        return px[y * pitch + x * 4 + 3];
+    };
+    /* Corner pixel (2,2): distance sqrt(2) from corner center (7,7) with
+     * radius 5 — inside, but (2,2) is at the very corner: distance from
+     * (7,7) is sqrt(25+25)=7.07 > 5 → transparent. */
+    EXPECT(alpha_at(2, 2) == 0);
+    EXPECT(alpha_at(2, 21) == 0);
+    EXPECT(alpha_at(21, 2) == 0);
+    EXPECT(alpha_at(21, 21) == 0);
+    /* Center is painted. */
+    EXPECT(alpha_at(12, 12) == 255);
+    /* Edge midpoints are painted (not corners). */
+    EXPECT(alpha_at(2, 12) == 255);  /* left edge, middle */
+    EXPECT(alpha_at(12, 2) == 255);  /* top edge, middle */
+
+    /* Radius clamp: 20x20 with radius 100 → effectively 10 (min(w,h)/2). */
+    viewruntime_frame_begin(surface);
+    viewruntime_draw_fill_rounded_rect(surface, 2.f, 2.f, 20.f, 20.f, 100.f,
+                                       255, 0, 0, 255, 2);
+    viewruntime_frame_end(surface);
+    viewruntime_surface_pixels(surface, &px, &pitch, &w, &h);
+    /* With clamped radius 10 the corner (2,2) is distance 11.3 from center
+     * (12,12) > 10 → transparent. */
+    EXPECT(alpha_at(2, 2) == 0);
+    EXPECT(alpha_at(12, 12) == 255);
+
+    viewruntime_surface_destroy(surface);
+}
+
+/* ScrollView clipping: a push_clip must restrict every later draw to the
+ * clip rect — pixels outside stay transparent even when a fill covers them;
+ * pop restores full drawing. This is the ScrollView viewport (RuntimeApiLab
+ * gap #4: without it all 6 cards paint unclipped). */
+static void test_clip_restricts_draws() {
+    void* surface = viewruntime_surface_create(nullptr);
+    EXPECT(surface != nullptr);
+    viewruntime_surface_resize(surface, 40, 40, 1.f);
+
+    viewruntime_frame_begin(surface);
+    /* Clip to (10,10)-(30,30), then paint a full-surface rect. */
+    viewruntime_clip_push(surface, 10.f, 10.f, 20.f, 20.f);
+    viewruntime_draw_fill_rect(surface, 0.f, 0.f, 40.f, 40.f, 255, 255, 0, 0, 1);
+    viewruntime_clip_pop(surface);
+    viewruntime_frame_end(surface);
+
+    const uint8_t* px = nullptr;
+    int pitch = 0, w = 0, h = 0;
+    viewruntime_surface_pixels(surface, &px, &pitch, &w, &h);
+    auto alpha_at = [&](int x, int y) -> int {
+        return px[y * pitch + x * 4 + 3];
+    };
+    /* Inside the clip rect: painted. */
+    EXPECT(alpha_at(15, 15) == 255);
+    EXPECT(alpha_at(20, 20) == 255);
+    /* Outside the clip rect: transparent (would be 255 without clip). */
+    EXPECT(alpha_at(5, 5) == 0);
+    EXPECT(alpha_at(35, 5) == 0);
+    EXPECT(alpha_at(5, 35) == 0);
+    EXPECT(alpha_at(35, 35) == 0);
+    /* Corner of the clip rect: painted (>= x0, < x1). */
+    EXPECT(alpha_at(10, 10) == 255);
+    EXPECT(alpha_at(29, 29) == 255);
+
+    viewruntime_surface_destroy(surface);
+}
+
+/* Regression: frame_begin must clear the clip stack — a clip pushed in one
+ * frame must not leak into the next (this is what made the flaky run look
+ * like "clip ignored": a leftover clip would clamp the next frame's fills,
+ * or an empty-surface clip could misbehave). */
+static void test_frame_begin_clears_clip() {
+    void* surface = viewruntime_surface_create(nullptr);
+    EXPECT(surface != nullptr);
+    viewruntime_surface_resize(surface, 40, 40, 1.f);
+
+    /* Frame 1: push a clip, draw inside it, pop. */
+    viewruntime_frame_begin(surface);
+    viewruntime_clip_push(surface, 10.f, 10.f, 20.f, 20.f);
+    viewruntime_draw_fill_rect(surface, 0.f, 0.f, 40.f, 40.f, 255, 255, 0, 0, 1);
+    viewruntime_clip_pop(surface);
+    viewruntime_frame_end(surface);
+
+    /* Frame 2 WITHOUT any clip push: a full-surface fill must cover
+     * EVERYTHING (a leaked clip from frame 1 would leave corners clear). */
+    viewruntime_frame_begin(surface);
+    viewruntime_draw_fill_rect(surface, 0.f, 0.f, 40.f, 40.f, 255, 0, 0, 255, 1);
+    viewruntime_frame_end(surface);
+
+    const uint8_t* px = nullptr;
+    int pitch = 0, w = 0, h = 0;
+    viewruntime_surface_pixels(surface, &px, &pitch, &w, &h);
+    auto alpha_at = [&](int x, int y) -> int {
+        return px[y * pitch + x * 4 + 3];
+    };
+    EXPECT(alpha_at(5, 5) == 255);   /* corner: must be painted in frame 2 */
+    EXPECT(alpha_at(35, 35) == 255); /* opposite corner */
+
+    viewruntime_surface_destroy(surface);
+}
+
 int main() {
     test_fill_rect_pixels();
     test_draw_text_paints_pixels();
@@ -277,5 +393,8 @@ int main() {
     test_draw_image_scaled();
     test_draw_image_cropped();
     test_draw_text_alignment_and_bold();
+    test_draw_rounded_rect_corners();
+    test_clip_restricts_draws();
+    test_frame_begin_clears_clip();
     return test_result();
 }
