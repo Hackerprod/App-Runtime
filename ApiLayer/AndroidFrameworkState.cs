@@ -11,7 +11,7 @@ namespace AndroidRuntime.Core.ApiLayer;
 
 public sealed record AndroidPeerLimits
 {
-    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024, int maxBoxed = 1024, int maxMapEntries = 1024, int maxMapViews = 256, int maxLazies = 256, int maxArrayDeques = 256, int maxLinkedHashSets = 256, int maxLinkedHashMaps = 256, int maxConcurrentHashMaps = 256, int maxSharedPreferences = 64, int maxSharedPreferencesEditors = 64)
+    public AndroidPeerLimits(int maxStringBuilders = 256, int maxBundles = 256, int maxIntents = 256, int maxToasts = 64, int maxViews = 4096, int maxAtomicReferences = 256, int maxWeakHashMaps = 256, int maxHashMaps = 256, int maxArrayLists = 256, int maxWeakReferences = 256, int maxCopyOnWriteArraySets = 256, int maxIterators = 256, int maxCopyOnWriteArrayLists = 256, int maxEnums = 256, int maxAtomicIntegers = 256, int maxThreads = 64, int maxExecutorServices = 16, int maxFutures = 256, int maxLoopers = 16, int maxHandlers = 256, int maxMethods = 1024, int maxBoxed = 1024, int maxMapEntries = 1024, int maxMapViews = 256, int maxLazies = 256, int maxArrayDeques = 256, int maxLinkedHashSets = 256, int maxLinkedHashMaps = 256, int maxConcurrentHashMaps = 256, int maxSharedPreferences = 64, int maxSharedPreferencesEditors = 64, int maxProcesses = 16, int maxInputStreams = 256, int maxReaders = 256)
     {
         StringBuilders = maxStringBuilders;
         Bundles = maxBundles;
@@ -44,6 +44,9 @@ public sealed record AndroidPeerLimits
         ConcurrentHashMaps = maxConcurrentHashMaps;
         SharedPreferences = maxSharedPreferences;
         SharedPreferencesEditors = maxSharedPreferencesEditors;
+        Processes = maxProcesses;
+        InputStreams = maxInputStreams;
+        Readers = maxReaders;
         Validate();
     }
 
@@ -79,10 +82,13 @@ public sealed record AndroidPeerLimits
     public int ConcurrentHashMaps { get; }
     public int SharedPreferences { get; }
     public int SharedPreferencesEditors { get; }
+    public int Processes { get; }
+    public int InputStreams { get; }
+    public int Readers { get; }
 
     public void Validate()
     {
-        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0 || Boxed <= 0 || MapEntries <= 0 || MapViews <= 0 || Lazies <= 0 || ArrayDeques <= 0 || LinkedHashSets <= 0 || LinkedHashMaps <= 0 || ConcurrentHashMaps <= 0 || SharedPreferences <= 0 || SharedPreferencesEditors <= 0)
+        if (StringBuilders <= 0 || Bundles <= 0 || Intents <= 0 || Toasts <= 0 || Views <= 0 || AtomicReferences <= 0 || WeakHashMaps <= 0 || HashMaps <= 0 || ArrayLists <= 0 || WeakReferences <= 0 || CopyOnWriteArraySets <= 0 || Iterators <= 0 || CopyOnWriteArrayLists <= 0 || Enums <= 0 || AtomicIntegers <= 0 || Threads <= 0 || ExecutorServices <= 0 || Futures <= 0 || Loopers <= 0 || Handlers <= 0 || Methods <= 0 || Boxed <= 0 || MapEntries <= 0 || MapViews <= 0 || Lazies <= 0 || ArrayDeques <= 0 || LinkedHashSets <= 0 || LinkedHashMaps <= 0 || ConcurrentHashMaps <= 0 || SharedPreferences <= 0 || SharedPreferencesEditors <= 0 || Processes <= 0 || InputStreams <= 0 || Readers <= 0)
             throw new ArgumentOutOfRangeException(nameof(AndroidPeerLimits), "Peer limits must be positive.");
     }
 }
@@ -114,7 +120,6 @@ public sealed class AndroidFrameworkState : IDisposable
         string activityDescriptor,
         ActivityWindowPeers windowPeers,
         int minimumLogPriority = 2,
-        AndroidToastLimits? toastLimits = null,
         AndroidPeerLimits? peerLimits = null,
         IAndroidClock? clock = null,
         IAndroidWallClock? wallClock = null,
@@ -141,7 +146,6 @@ public sealed class AndroidFrameworkState : IDisposable
         if (minimumLogPriority is < 2 or > 7)
             throw new ArgumentOutOfRangeException(nameof(minimumLogPriority));
         MinimumLogPriority = minimumLogPriority;
-        ToastLimits = toastLimits ?? AndroidToastLimits.Default;
         PeerLimits = peerLimits ?? AndroidPeerLimits.Default;
         PeerLimits.Validate();
         Clock = clock ?? new StopwatchAndroidClock();
@@ -164,7 +168,7 @@ public sealed class AndroidFrameworkState : IDisposable
         StringBuilders = new AndroidPeerStore<StringBuilder>("StringBuilder", PeerLimits.StringBuilders);
         Bundles = new AndroidPeerStore<BundlePeer>("Bundle", PeerLimits.Bundles);
         Intents = new AndroidPeerStore<IntentPeer>("Intent", PeerLimits.Intents);
-        Toasts = new AndroidPeerStore<ToastPeer>("Toast", PeerLimits.Toasts, peer => peer.Notification.Dispose());
+        ToastObjects = new AndroidPeerStore<ToastPeer>("Toast", PeerLimits.Toasts);
         AtomicReferences = new AndroidPeerStore<AtomicReferencePeer>("AtomicReference", PeerLimits.AtomicReferences);
         AtomicBooleans = new AndroidPeerStore<AtomicBooleanPeer>("AtomicBoolean", PeerLimits.AtomicIntegers);
         WeakHashMaps = new AndroidPeerStore<WeakHashMapPeer>("WeakHashMap", PeerLimits.WeakHashMaps);
@@ -190,6 +194,9 @@ public sealed class AndroidFrameworkState : IDisposable
         LinkedHashSets = new AndroidPeerStore<OrderedSetPeer>("LinkedHashSet", PeerLimits.LinkedHashSets);
         LinkedHashMaps = new AndroidPeerStore<LinkedHashMapPeer>("LinkedHashMap", PeerLimits.LinkedHashMaps);
         ConcurrentHashMaps = new AndroidPeerStore<ConcurrentHashMapPeer>("ConcurrentHashMap", PeerLimits.ConcurrentHashMaps);
+        Processes = new AndroidPeerStore<ProcessPeer>("Process", PeerLimits.Processes, peer => peer.DisposeProcess());
+        InputStreams = new AndroidPeerStore<InputStreamPeer>("InputStream", PeerLimits.InputStreams);
+        Readers = new AndroidPeerStore<BufferedReaderPeer>("BufferedReader", PeerLimits.Readers);
         SharedPreferences = new AndroidPeerStore<SharedPreferencesPeer>("SharedPreferences", PeerLimits.SharedPreferences);
         SharedPreferencesEditors = new AndroidPeerStore<SharedPreferencesEditorPeer>("SharedPreferences.Editor", PeerLimits.SharedPreferencesEditors);
         ApplicationContext = new DexObject("Landroid/app/Application;");
@@ -204,7 +211,6 @@ public sealed class AndroidFrameworkState : IDisposable
     public int MinimumLogPriority { get; }
     public DexObject ApplicationContext { get; }
     public DexObject LauncherIntent { get; }
-    public AndroidToastLimits ToastLimits { get; }
     public AndroidPeerLimits PeerLimits { get; }
     public IAndroidClock Clock { get; }
     public IAndroidWallClock WallClock { get; }
@@ -267,7 +273,7 @@ public sealed class AndroidFrameworkState : IDisposable
         bool allowed = IsCapabilityAllowed(new(SessionId, PackageName, capability, "checkSelfPermission"));
         return allowed ? 0 : -1;
     }
-    public AndroidPeerCounts PeerCounts => new(StringBuilders.Count, Bundles.Count, Intents.Count, Toasts.Count);
+    public AndroidPeerCounts PeerCounts => new(StringBuilders.Count, Bundles.Count, Intents.Count, ToastObjects.Count);
     internal bool IsFinishing => Volatile.Read(ref _finishing) != 0;
     internal bool IsDestroyed => Volatile.Read(ref _destroyed) != 0;
     internal event Action? FinishRequested;
@@ -276,7 +282,7 @@ public sealed class AndroidFrameworkState : IDisposable
     internal AndroidPeerStore<StringBuilder> StringBuilders { get; }
     internal AndroidPeerStore<BundlePeer> Bundles { get; }
     internal AndroidPeerStore<IntentPeer> Intents { get; }
-    internal AndroidPeerStore<ToastPeer> Toasts { get; }
+    internal AndroidPeerStore<ToastPeer> ToastObjects { get; }
     internal AndroidPeerStore<AtomicReferencePeer> AtomicReferences { get; }
     internal AndroidPeerStore<AtomicBooleanPeer> AtomicBooleans { get; }
     internal AndroidPeerStore<WeakHashMapPeer> WeakHashMaps { get; }
@@ -302,6 +308,16 @@ public sealed class AndroidFrameworkState : IDisposable
     internal AndroidPeerStore<OrderedSetPeer> LinkedHashSets { get; }
     internal AndroidPeerStore<LinkedHashMapPeer> LinkedHashMaps { get; }
     internal AndroidPeerStore<ConcurrentHashMapPeer> ConcurrentHashMaps { get; }
+    /// <summary>Real host processes spawned by java.lang.ProcessBuilder (ping
+    /// and friends). The peer wraps a System.Diagnostics.Process; start()
+    /// launches it, waitFor() joins, destroy() kills, streams read its output.</summary>
+    internal AndroidPeerStore<ProcessPeer> Processes { get; }
+    /// <summary>java.io.InputStream facades returned by Process.getInputStream()/
+    /// getErrorStream(): read() pulls bytes from the real process output.</summary>
+    internal AndroidPeerStore<InputStreamPeer> InputStreams { get; }
+    /// <summary>java.io.Reader facades (InputStreamReader/BufferedReader): the
+    /// buffered reader buffers lines of the process output for readLine().</summary>
+    internal AndroidPeerStore<BufferedReaderPeer> Readers { get; }
     /// <summary>The session's GIL: shared by the interpreter and every binding that
     /// must release it around real blocking (sleep/join/monitor-enter/class-init
     /// wait). AndroidAppRuntime replaces this with the execution lane's GIL.</summary>
@@ -719,7 +735,7 @@ public sealed class AndroidFrameworkState : IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        Toasts.Clear();
+        ToastObjects.Clear();
         Intents.Clear();
         Bundles.Clear();
         StringBuilders.Clear();
@@ -881,7 +897,8 @@ internal sealed class IntentPeer
 
 internal sealed class ToastPeer
 {
-    internal required IAndroidToastNotification Notification { get; init; }
+    /* Guest Toast marker: all real state (text, duration, active, timeout)
+     * lives in ViewRuntime's session toast state (the exact AOSP port). */
 }
 
 /// <summary>Mutable per-instance state for a guest AtomicReference. No real
@@ -1247,6 +1264,45 @@ internal sealed class SharedPreferencesEditorPeer
     internal required SharedPreferencesPeer Owner { get; init; }
     internal Dictionary<string, object> Modified { get; } = new(StringComparer.Ordinal);
     internal bool Clear { get; set; }
+}
+
+/// <summary>
+/// A real host process spawned by java.lang.ProcessBuilder. The guest-facing
+/// DexObject("Ljava/lang/Process;") wraps a System.Diagnostics.Process that
+/// actually runs on Windows (ping etc). SECURITY: this is the GUEST invoking a
+/// host subprocess — the command array is the guest's argv, run through
+/// ProcessStartInfo with UseShellExecute=false and no shell interpretation,
+/// which is the faithful java.lang.ProcessBuilder contract (direct exec, no
+/// shell). The sandbox policy funnel (AndroidCapabilityPolicy) does not gate
+/// process spawning today; host-side subprocess execution is the documented
+/// behavior of this runtime's ProcessBuilder binding.
+/// </summary>
+internal sealed class ProcessPeer
+{
+    internal System.Diagnostics.Process? Process { get; set; }
+    internal StreamReader? Stdout { get; set; }
+    internal StreamReader? Stderr { get; set; }
+    internal void DisposeProcess()
+    {
+        try { Stdout?.Dispose(); } catch { }
+        try { Stderr?.Dispose(); } catch { }
+        try { Process?.Dispose(); } catch { }
+    }
+}
+
+/// <summary>java.io.InputStream facade over a real process output stream.
+/// read()/readLine() pulls from the process's captured stdout/stderr reader.</summary>
+internal sealed class InputStreamPeer
+{
+    internal ProcessPeer? Process { get; set; }
+    internal bool IsError { get; set; }
+}
+
+/// <summary>java.io.Reader facade (InputStreamReader/BufferedReader) over an
+/// InputStream peer. readLine() pulls one line from the process output.</summary>
+internal sealed class BufferedReaderPeer
+{
+    internal InputStreamPeer? Source { get; set; }
 }
 
 /// <summary>

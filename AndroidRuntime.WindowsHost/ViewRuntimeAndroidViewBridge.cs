@@ -32,13 +32,37 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
     private readonly Dictionary<nint, DexObject?> _listeners = [];
     private readonly Dictionary<int, string> _xmlOnClickById = [];
     private readonly Dictionary<nint, string> _xmlOnClickByNative = [];
+    // Native click dispatch only carries the view's resource id (android.h:738);
+    // these maps resolve it back to the guest view + listener without a native
+    // round trip from inside the native callback.
+    private readonly Dictionary<int, DexObject> _viewsByResourceId = [];
+    private readonly Dictionary<int, DexObject?> _listenersByResourceId = [];
     private readonly object _listenersGate = new();
     private readonly ResourceCallbacks? _callbacks;
+    private ViewRuntimeBridgeNative.AndroidUiClickCallback? _clickCallback;
+    private ViewRuntimeBridgeNative.AndroidUiClickCallback? _longClickCallback;
     private DexInterpreter? _interpreter;
     private DexObject? _activity;
     private Func<Func<object?>, object?>? _dispatchToLane;
     private nint _root;
     private int _disposed;
+
+    /// <summary>Raised after any visual view-state mutation so the host renders
+    /// a fresh frame. The host coalesces (a frame in flight covers pending
+    /// requests), so N mutations in one guest turn cost exactly one render.
+    /// Generic invalidate channel: SetText / SetEnabled / SetVisibility /
+    /// SetPressed / SetHovered / SetScrollOffset / PerformClick / Inflate all
+    /// announce through this single event — no binding needs to know how to
+    /// reach the render loop, and new mutators can't forget the frame.</summary>
+    public event Action? FrameRequested;
+
+    private void RequestFrame()
+    {
+        // Fire on the caller's thread; the host's handler is responsible for
+        // marshaling to the UI thread (RequestFrame already does BeginInvoke).
+        // A null/cleared subscription (session detached) is a silent no-op.
+        FrameRequested?.Invoke();
+    }
 
     public ViewRuntimeAndroidViewBridge(AndroidResourceResolver resources, AndroidResourceQueryService queries, int applicationThemeStyleId)
     {
@@ -74,6 +98,20 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
                     Marshal.GetFunctionPointerForDelegate(_callbacks.ResolveResourceDelegate),
                     Marshal.GetFunctionPointerForDelegate(_callbacks.ResolveStyleDelegate),
                     Marshal.GetFunctionPointerForDelegate(_callbacks.FetchFileDelegate),
+                    nint.Zero);
+                // Register the click channel: when ViewRuntime's gesture machine
+                // decides performClick / performLongClick (View.java:8072/8118) it
+                // invokes these with the view's resource id; the host runs the
+                // guest DEX listener. Both callbacks stay rooted for the session.
+                // on_long_click MUST be non-null: the native long-press timer only
+                // arms when a long-click callback exists (android_input.cpp), and
+                // the fired long-press suppresses the following UP click.
+                _clickCallback = OnNativeClick;
+                _longClickCallback = OnNativeLongClick;
+                ViewRuntimeBridgeNative.android_ui_set_click_callback(
+                    _ui,
+                    Marshal.GetFunctionPointerForDelegate(_clickCallback),
+                    Marshal.GetFunctionPointerForDelegate(_longClickCallback),
                     nint.Zero);
             }
         }
@@ -140,7 +178,24 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
             if (status != 0 || root == 0)
                 throw new InvalidOperationException($"ViewRuntime inflate failed (status {status}).");
             _root = root;
-            return RegisterView(root);
+            DexObject guest = RegisterView(root);
+            // Declarative android:onClick views must be CLICKABLE for the native
+            // gesture machine to perform the click (View.java:7868 semantics),
+            // and REGISTERED so the click callback's resource-id lookup resolves
+            // even when the guest never calls findViewById on them (real Android
+            // resolves android:onClick purely by method name).
+            foreach (AndroidInflateNode node in tree.Nodes)
+            {
+                if (node.XmlOnClick is null || node.ResourceId == 0) continue;
+                nint xmlView = ViewRuntimeBridgeNative.android_ui_find_view_by_id(_ui, node.ResourceId);
+                if (xmlView != 0)
+                {
+                    RegisterView(xmlView);
+                    ViewRuntimeBridgeNative.android_view_set_clickable(xmlView, 1);
+                }
+            }
+            RequestFrame(); /* new content tree → render it */
+            return guest;
         }
         finally
         {
@@ -235,6 +290,7 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
     {
         RequireAvailable();
         ViewRuntimeBridgeNative.android_view_set_enabled(NativeOf(view), (byte)(enabled ? 1 : 0));
+        RequestFrame(); /* enabled changes visual state (dim/clickable) */
     }
 
     public bool IsEnabled(DexObject view)
@@ -249,12 +305,14 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
     {
         RequireAvailable();
         ViewRuntimeBridgeNative.android_view_set_pressed(NativeOf(view), (byte)(pressed ? 1 : 0));
+        RequestFrame(); /* pressed re-resolves the background selector */
     }
 
     public void SetHovered(DexObject view, bool hovered)
     {
         RequireAvailable();
         ViewRuntimeBridgeNative.android_view_set_hovered(NativeOf(view), (byte)(hovered ? 1 : 0));
+        RequestFrame(); /* hovered re-resolves the background selector */
     }
 
     public void SetScrollOffset(DexObject view, float x, float y)
@@ -267,7 +325,10 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
         nint native = NativeOf(view);
         nint container = FindScrollContainer(native);
         if (container != 0)
+        {
             ViewRuntimeBridgeNative.android_view_set_scroll_offset(container, x, y);
+            RequestFrame(); /* scrolled content → render the new offset */
+        }
     }
 
     private static nint FindScrollContainer(nint view)
@@ -287,6 +348,7 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
     {
         RequireAvailable();
         ViewRuntimeBridgeNative.android_view_set_visibility(NativeOf(view), visibility);
+        RequestFrame(); /* gone/invisible/visible changes what renders */
     }
 
     public int GetVisibility(DexObject view)
@@ -300,11 +362,22 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
     {
         RequireAvailable();
         nint native = NativeOf(view);
+        int resourceId = 0;
+        try { resourceId = ViewRuntimeBridgeNative.android_view_get_resource_id(native); } catch { }
         lock (_listenersGate)
+        {
             _listeners[native] = listener;
-        // The XML onClick handler (if any) is what ViewRuntime's hit-test
-        // dispatch uses; programmatic listeners are dispatched by App Runtime
-        // after hit-test returns the view id (see PerformClick).
+            if (resourceId != 0)
+            {
+                if (listener is null) _listenersByResourceId.Remove(resourceId);
+                else _listenersByResourceId[resourceId] = listener;
+            }
+        }
+        // Real View.setOnClickListener sets the CLICKABLE flag unconditionally
+        // (View.java:7868); ViewRuntime's gesture machine only performs clicks
+        // on clickable views. The XML onClick path marks its views at inflate.
+        ViewRuntimeBridgeNative.android_view_set_clickable(native, 1);
+        RequestFrame(); /* clickable changes the pressed/click visual state */
     }
 
     public bool PerformClick(DexObject view)
@@ -352,6 +425,10 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
             else
                 dispatch(() => interpreter.InvokePublicInstanceExact(activity, xmlOnClick!, "(Landroid/view/View;)V", view));
         }
+        /* The click handler ran guest DEX (setStatus, visibility, pressed…).
+         * The visual mutations inside it (SetText etc.) each announce their own
+         * frame; the input path also requests one after the click, so no extra
+         * frame is needed here. */
         return true;
     }
 
@@ -359,6 +436,7 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
     {
         RequireAvailable();
         ViewRuntimeBridgeNative.android_view_set_text(NativeOf(view), text);
+        RequestFrame(); /* text is visual — re-render the view */
     }
 
     public string GetText(DexObject view)
@@ -428,10 +506,44 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
 
     // ---- frame lifecycle / hit-test ----
 
+    /// <summary>Serializes RenderFrame: the native measure/layout/record/render
+    /// pipeline mutates the SAME view tree, so two concurrent renders (e.g. a
+    /// guest click's FrameRequest racing an input-triggered frame) corrupt the
+    /// tree and crash in android_ui_render (0xC0000005). One render at a time;
+    /// late requests return the previous frame's result via the caller re-poll.</summary>
+    private readonly SemaphoreSlim _renderGate = new(1, 1);
+
     public byte[]? RenderFrame(int pixelWidth, int pixelHeight, float density)
     {
         RequireAvailable();
         if (_root == 0) return null;
+        // Run the native cycle on the SAME lane that mutates the tree (guest
+        // setText/visibility/… run there). A render racing a mutation on
+        // another thread reads view->text while it is being reassigned →
+        // intermittent 0xC0000005. dispatchToLane is re-entrant (fast path when
+        // already on the lane), so this is free when the host calls from the lane.
+        Func<byte[]?> render = () => RenderFrameLocked(pixelWidth, pixelHeight, density);
+        Func<Func<object?>, object?>? dispatch = _dispatchToLane;
+        if (dispatch is not null)
+            return (byte[]?)dispatch(render);
+        return render();
+    }
+
+    private byte[]? RenderFrameLocked(int pixelWidth, int pixelHeight, float density)
+    {
+        _renderGate.Wait();
+        try
+        {
+            return RenderFrameNative(pixelWidth, pixelHeight, density);
+        }
+        finally
+        {
+            _renderGate.Release();
+        }
+    }
+
+    private byte[]? RenderFrameNative(int pixelWidth, int pixelHeight, float density)
+    {
         ViewRuntimeBridgeNative.viewruntime_surface_resize(_surface, pixelWidth, pixelHeight, density);
         // Full Phase-2 frame pipeline: ViewRuntime measures, lays out, records
         // a display list, and renders it to the surface — this side only
@@ -449,6 +561,11 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
         {
             ViewRuntimeBridgeNative.display_list_destroy(list);
         }
+        // Toast overlay: android.widget.Toast is a TYPE_TOAST window drawn
+        // ABOVE the app frame (ToastPresenter.addToastView). ViewRuntime owns
+        // the toast state and its SHORT/LONG timeout; this side just asks it
+        // to paint the overlay after the app frame.
+        ViewRuntimeBridgeNative.android_toast_render(_ui);
         ViewRuntimeBridgeNative.viewruntime_surface_pixels(_surface, out nint pixels, out int pitch, out int width, out int height);
         if (pixels == 0 || width <= 0 || height <= 0) return null;
         int bytes = checked(width * height * 4);
@@ -467,6 +584,163 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
         nint hit = ViewRuntimeBridgeNative.android_ui_hit_test(_ui, _root, pixelX, pixelY);
         if (hit == 0) return null;
         return ViewRuntimeBridgeNative.android_view_get_resource_id(hit);
+    }
+
+    // ---- Toast (relayed to ViewRuntime; exact AOSP port) ----
+
+    public void ToastMakeText(string? text, int duration)
+    {
+        RequireAvailable();
+        ViewRuntimeBridgeNative.android_toast_make_text(_ui, text, duration);
+    }
+
+    public void ToastSetText(string? text)
+    {
+        RequireAvailable();
+        ViewRuntimeBridgeNative.android_toast_set_text(_ui, text);
+    }
+
+    public void ToastSetDuration(int duration)
+    {
+        RequireAvailable();
+        ViewRuntimeBridgeNative.android_toast_set_duration(_ui, duration);
+    }
+
+    public int ToastGetDuration()
+    {
+        RequireAvailable();
+        return ViewRuntimeBridgeNative.android_toast_get_duration(_ui);
+    }
+
+    public void ToastShow()
+    {
+        RequireAvailable();
+        ViewRuntimeBridgeNative.android_toast_show(_ui);
+        RequestFrame(); /* toast appeared — render it */
+    }
+
+    public void ToastCancel()
+    {
+        RequireAvailable();
+        ViewRuntimeBridgeNative.android_toast_cancel(_ui);
+        RequestFrame(); /* toast hidden — clear the overlay */
+    }
+
+    public bool ToastIsActive()
+    {
+        if (!_available || _ui == 0) return false;
+        return ViewRuntimeBridgeNative.android_toast_is_active(_ui) != 0;
+    }
+
+    public void ToastRender()
+    {
+        if (!_available || _ui == 0) return;
+        ViewRuntimeBridgeNative.android_toast_render(_ui);
+    }
+
+    // ---- input dispatch (ViewRuntime owns the ENTIRE gesture machine) ----
+    // The host forwards raw events; the C++ side decides hit-testing, touch
+    // target, slop, long-press, pressed visuals and the click decision. The
+    // click comes back through OnNativeClick — never a C# tap heuristic.
+
+    public void DispatchTouch(int action, float x, float y)
+    {
+        RequireAvailable();
+        if (_root == 0) return;
+        ViewRuntimeBridgeNative.android_ui_dispatch_touch(_ui, _root, action, x, y);
+    }
+
+    public void DispatchKey(int action, int keyCode)
+    {
+        RequireAvailable();
+        if (_root == 0) return;
+        ViewRuntimeBridgeNative.android_ui_dispatch_key(_ui, _root, action, keyCode);
+    }
+
+    public int GesturePoll()
+    {
+        if (!_available || _ui == 0) return 0;
+        return ViewRuntimeBridgeNative.android_ui_gesture_poll(_ui);
+    }
+
+    public bool GestureActive
+    {
+        get
+        {
+            if (!_available || _ui == 0) return false;
+            return ViewRuntimeBridgeNative.android_ui_gesture_active(_ui) != 0;
+        }
+    }
+
+    /// <summary>ViewRuntime's gesture machine decided performClick (View.java:
+    /// 8072). Runs the guest DEX OnClickListener / declarative android:onClick
+    /// on the session lane. The callback fires synchronously from inside the
+    /// native dispatch/poll call on the input or poll thread, so the DEX run is
+    /// deferred to a worker: the native call returns before guest mutations
+    /// touch the tree (avoids re-entrant native access).</summary>
+    private void OnNativeClick(int resourceId, nint userData)
+    {
+        if (_disposed != 0) return;
+        _ = Task.Run(() =>
+        {
+            try { DispatchClickByResourceId(resourceId); }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        });
+    }
+
+    /// <summary>ViewRuntime decided performLongClick (View.java:8118). No guest
+    /// OnLongClickListener binding exists yet; the native long-press machinery
+    /// already suppressed the following UP click. Refresh the pressed visuals.
+    /// Non-null registration is REQUIRED: the native long-press timer only arms
+    /// when a long-click callback exists.</summary>
+    private void OnNativeLongClick(int resourceId, nint userData)
+    {
+        if (_disposed != 0) return;
+        RequestFrame(); /* long-press visuals (AOSP keeps pressed until UP) */
+    }
+
+    /// <summary>Dispatches a click identified by resource id (the native click
+    /// callback identity): resolve the guest view + listener, run real guest
+    /// DEX on the session execution lane. Mirrors PerformClick's dispatch
+    /// pattern, keyed by resource id instead of native handle.</summary>
+    private bool DispatchClickByResourceId(int resourceId)
+    {
+        DexInterpreter? interpreter = _interpreter;
+        DexObject? activity = _activity;
+        if (interpreter is null || activity is null) return false;
+
+        DexObject? view;
+        DexObject? listener = null;
+        string? xmlOnClick = null;
+        lock (_listenersGate)
+        {
+            if (!_viewsByResourceId.TryGetValue(resourceId, out view)) return false;
+            if (_listenersByResourceId.TryGetValue(resourceId, out listener)) { }
+            else if (resourceId != 0 && _xmlOnClickById.TryGetValue(resourceId, out xmlOnClick)) { }
+        }
+        if (listener is null && string.IsNullOrWhiteSpace(xmlOnClick)) return false;
+
+        Func<Func<object?>, object?>? dispatch = _dispatchToLane;
+        if (listener is not null)
+        {
+            if (dispatch is null)
+                interpreter.InvokeVirtualInstanceExact(listener, "onClick", "(Landroid/view/View;)V", view);
+            else
+                dispatch(() => interpreter.InvokeVirtualInstanceExact(listener, "onClick", "(Landroid/view/View;)V", view));
+        }
+        else
+        {
+            if (dispatch is null)
+                interpreter.InvokePublicInstanceExact(activity, xmlOnClick!, "(Landroid/view/View;)V", view);
+            else
+                dispatch(() => interpreter.InvokePublicInstanceExact(activity, xmlOnClick!, "(Landroid/view/View;)V", view));
+        }
+        /* The click handler ran guest DEX (setStatus, visibility, pressed…).
+         * The visual mutations inside it (SetText etc.) each announce their own
+         * frame; the input path also requests one after the click, so no extra
+         * frame is needed here. */
+        return true;
     }
 
     // ---- internal helpers ----
@@ -509,12 +783,17 @@ public sealed class ViewRuntimeAndroidViewBridge : IAndroidViewBridge
                 _listeners[native] = null;
                 // If the view carries a declarative android:onClick and has a
                 // resource id, key it by native handle too so dispatch works
-                // without another native query.
+                // without another native query. The resource-id → guest map
+                // feeds the native click callback (which carries only the id).
                 try
                 {
                     int id = ViewRuntimeBridgeNative.android_view_get_resource_id(native);
-                    if (id != 0 && _xmlOnClickById.TryGetValue(id, out string? xmlOnClick))
-                        _xmlOnClickByNative[native] = xmlOnClick;
+                    if (id != 0)
+                    {
+                        _viewsByResourceId[id] = guest;
+                        if (_xmlOnClickById.TryGetValue(id, out string? xmlOnClick))
+                            _xmlOnClickByNative[native] = xmlOnClick;
+                    }
                 }
                 catch (Exception) { }
             }

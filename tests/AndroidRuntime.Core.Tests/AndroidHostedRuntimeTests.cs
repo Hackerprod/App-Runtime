@@ -3,6 +3,7 @@ using AndroidRuntime.Core.ApiLayer;
 using AndroidRuntime.Core.Dex;
 using AndroidRuntime.Core.Hosting;
 using AndroidRuntime.Core.Apk;
+using AndroidRuntime.Core.Ui;
 
 namespace AndroidRuntime.Core.Tests;
 
@@ -72,11 +73,12 @@ public sealed class AndroidHostedRuntimeTests
     {
         var windows = new FakeWindowFactory();
         var logs = new FakeLogSink();
+        var bridge = new FakeViewBridge();
         var runtime = new AndroidAppRuntime();
 
         await using var hosted = await runtime.LaunchSessionAsync(
             FixturePath(),
-            new AndroidRuntimeServices(windows, logs, traceCapacity: 128));
+            new AndroidRuntimeServices(windows, logs, traceCapacity: 128, viewBridgeFactory: (_, _, _) => bridge));
 
         Assert.Equal(AndroidActivityState.Resumed, hosted.Session.State);
         Assert.Equal(123, hosted.Session.Activity.InstanceFields["lifecycleState"]);
@@ -99,8 +101,8 @@ public sealed class AndroidHostedRuntimeTests
         Assert.Equal(unchecked((int)0xffff8007), hosted.Session.Activity.InstanceFields["colorValue"]);
         Assert.Equal(6, logs.Entries.Count);
         Assert.All(logs.Entries, log => { Assert.Equal("RuntimeProbe", log.Tag); Assert.True(log.Result > 0); Assert.Equal(hosted.SessionId, log.SessionId); });
-        Assert.True(window.IsToastVisible);
-        Assert.Equal("value=41true!", window.ToastText);
+        Assert.Equal("value=41true!", bridge.ToastMadeText);
+        Assert.Equal(1, bridge.ToastShowCount);
 
         var apiEvents = hosted.Trace.Snapshot()
             .Where(item => item.Invocation.ResolvedApi.MethodName is "setTitle" or "i")
@@ -249,7 +251,7 @@ public sealed class AndroidHostedRuntimeTests
             new FakeWindow();
     }
 
-    private sealed class FakeWindow : IActivityWindow, IAndroidToastHost
+    private sealed class FakeWindow : IActivityWindow
     {
         private int _closed;
         public event EventHandler? Closed;
@@ -258,8 +260,6 @@ public sealed class AndroidHostedRuntimeTests
         public int TitleSetCount { get; private set; }
         public int ShowCount { get; private set; }
         public bool IsClosed => Volatile.Read(ref _closed) != 0;
-        public bool IsToastVisible { get; private set; }
-        public string? ToastText { get; private set; }
 
         public void SetTitle(string? title, CancellationToken cancellationToken)
         {
@@ -283,21 +283,6 @@ public sealed class AndroidHostedRuntimeTests
         }
 
         public void Dispose() => Close();
-
-        public IAndroidToastNotification CreateToast(string text, int duration, CancellationToken cancellationToken) => new FakeToast(this, text, duration);
-
-        private sealed class FakeToast : IAndroidToastNotification
-        {
-            private readonly FakeWindow _owner;
-            private string _text;
-            public FakeToast(FakeWindow owner, string text, int duration) { _owner = owner; _text = text; Duration = duration; }
-            public bool IsVisible { get; private set; }
-            public int Duration { get; set; }
-            public string Text { get => _text; set { _text = value; if (IsVisible) _owner.ToastText = value; } }
-            public void Show(CancellationToken cancellationToken) { cancellationToken.ThrowIfCancellationRequested(); _owner.ToastText = Text; _owner.IsToastVisible = IsVisible = true; }
-            public void Cancel() { IsVisible = false; _owner.IsToastVisible = false; }
-            public void Dispose() => Cancel();
-        }
     }
 
     private sealed class FakeLogSink : IAndroidLogSink
@@ -321,5 +306,64 @@ public sealed class AndroidHostedRuntimeTests
     private sealed class ThrowingLogSink : IAndroidLogSink
     {
         public int Info(AndroidLogEntry entry) => throw new InvalidOperationException("sink failed");
+    }
+
+    private sealed class FakeViewBridge : IAndroidViewBridge
+    {
+        public string? ToastMadeText { get; private set; }
+        public int ToastShowCount { get; private set; }
+        public bool IsAvailable => true;
+        public event Action? FrameRequested { add { } remove { } }
+        public void DisposeBridge() { }
+        public void AttachSession(DexInterpreter interpreter, DexObject activity, Func<Func<object?>, object?> dispatchToLane) { }
+        public void SetContentView(int layoutResourceId) { }
+        public DexObject Inflate(int layoutResourceId) => new("Landroid/view/View;");
+        public DexObject? FindViewById(int id, DexObject? receiver = null) => null;
+        public int GetId(DexObject view) => 0;
+        public void SetEnabled(DexObject view, bool enabled) { }
+        public bool IsEnabled(DexObject view) => true;
+        public void SetVisibility(DexObject view, int visibility) { }
+        public int GetVisibility(DexObject view) => 0;
+        public void SetPressed(DexObject view, bool pressed) { }
+        public void SetHovered(DexObject view, bool hovered) { }
+        public void SetScrollOffset(DexObject view, float x, float y) { }
+        public void SetOnClickListener(DexObject view, DexObject? listener) { }
+        public bool PerformClick(DexObject view) => false;
+        public void SetText(DexObject view, string? text) { }
+        public string GetText(DexObject view) => string.Empty;
+        public bool IsLaidOut(DexObject view) => true;
+        public int GetPaddingLeft(DexObject view) => 0;
+        public int GetPaddingTop(DexObject view) => 0;
+        public int GetPaddingRight(DexObject view) => 0;
+        public int GetPaddingBottom(DexObject view) => 0;
+        public DexObject ObtainStyledAttributes() => new("Landroid/content/res/TypedArray;");
+        public int TypedArrayGetIndexCount() => 0;
+        public bool TypedArrayHasValue(int index) => false;
+        public string? TypedArrayGetString(int index) => null;
+        public int TypedArrayGetColor(int index, int defaultValue) => defaultValue;
+        public DexObject? TypedArrayGetColorStateList(int index) => null;
+        public float TypedArrayGetDimension(int index, float defaultValue) => defaultValue;
+        public int TypedArrayGetInt(int index, int defaultValue) => defaultValue;
+        public int TypedArrayGetResourceId(int index, int defaultValue) => defaultValue;
+        public bool TypedArrayGetBoolean(int index, bool defaultValue) => defaultValue;
+        public float TypedArrayGetFloat(int index, float defaultValue) => defaultValue;
+        public int TypedArrayGetDimensionPixelSize(int index, int defaultValue) => defaultValue;
+        public int TypedArrayGetDimensionPixelOffset(int index, int defaultValue) => defaultValue;
+        public int TypedArrayGetIndex(int index) => 0;
+        public bool TypedArrayGetValue(int index) => false;
+        public byte[]? RenderFrame(int pixelWidth, int pixelHeight, float density) => null;
+        public int? HitTest(float pixelX, float pixelY) => null;
+        public void ToastMakeText(string? text, int duration) => ToastMadeText = text;
+        public void ToastSetText(string? text) => ToastMadeText = text;
+        public void ToastSetDuration(int duration) { }
+        public int ToastGetDuration() => 0;
+        public void ToastShow() => ToastShowCount++;
+        public void ToastCancel() { }
+        public bool ToastIsActive() => false;
+        public void ToastRender() { }
+        public void DispatchTouch(int action, float x, float y) { }
+        public void DispatchKey(int action, int keyCode) { }
+        public int GesturePoll() => 0;
+        public bool GestureActive => false;
     }
 }

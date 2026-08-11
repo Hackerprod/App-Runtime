@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <mutex>
 
 /* Internal Android view-model state. The public ABI exposes only opaque
  * handles; every layout/measure decision lives here. */
@@ -36,6 +37,10 @@ struct android_view_s {
     int32_t gravity = 0;            /* container gravity (LinearLayout/FrameLayout) */
     int32_t visibility = ANDROID_VISIBLE;
     bool enabled = true;
+    /* View.mViewFlags CLICKABLE (View.java:7868 setOnClickListener sets it):
+     * a clickable view consumes touch and performs click on UP. The host sets
+     * this when a guest listener (programmatic or XML onClick) is attached. */
+    bool clickable = false;
 
     /* LinearLayout advanced (AOSP LinearLayout fields). */
     int32_t layout_direction = ANDROID_LAYOUT_DIRECTION_LTR;
@@ -255,6 +260,45 @@ struct android_ui_s {
     std::vector<android_view_s*> roots;
     std::vector<android_view_s*> all_views;
     std::unordered_map<int32_t, android_view_s*> id_index;
+
+    /* Toast state (android.widget.Toast, exact AOSP semantics — owned here,
+     * not in the host). Guarded by toast_mutex; active_toast_deadline_ms is
+     * the steady-clock deadline at which TN would send HIDE (SHORT=4000ms,
+     * LONG=7000ms, ToastPresenter.java). The host polls android_toast_is_active
+     * each frame and renders android_toast_render over the app frame. */
+    std::mutex toast_mutex;
+    std::string toast_text;
+    int32_t toast_duration = ANDROID_TOAST_LENGTH_SHORT;
+    bool toast_active = false;
+    uint64_t toast_deadline_ms = 0;
+    bool has_toast = false; /* makeText was called (state exists) */
+
+    /* Touch gesture state (View.dispatchTouchEvent / View.onTouchEvent /
+     * ViewGroup.dispatchTouchEvent exact port, android_input.cpp). Only one
+     * gesture at a time — the host dispatches ACTION_DOWN/UP/MOVE/CANCEL. */
+    struct {
+        /* The view that received ACTION_DOWN (ViewGroup.mFirstTouchTarget):
+         * the gesture is delivered to THIS view until UP/CANCEL, never
+         * re-hit-tested (ViewGroup.java:2675, 2717-2766). */
+        android_view_s* touch_target = nullptr;
+        bool pressed = false;        /* View.PFLAG_PRESSED */
+        bool prepressed = false;     /* View.PFLAG_PREPRESSED (scrolling container) */
+        bool has_performed_long_press = false; /* View.mHasPerformedLongPress */
+        bool ignore_next_up = false; /* View.mIgnoreNextUpEvent */
+        float down_x = 0.f, down_y = 0.f;
+        float last_x = 0.f, last_y = 0.f;
+        uint64_t down_ms = 0;
+        uint64_t long_press_deadline_ms = 0; /* 0 = no long-press pending */
+        bool long_press_pending = false;
+        uint64_t tap_deadline_ms = 0;        /* 0 = no tap (prepressed) pending */
+        bool tap_pending = false;
+        /* Focused view for key dispatch (Enter/Space → performClick). */
+        android_view_s* focused = nullptr;
+        /* Click dispatch channel (C++ decides click → host runs guest DEX). */
+        void (*on_click)(int32_t resource_id, void* user_data) = nullptr;
+        void (*on_long_click)(int32_t resource_id, void* user_data) = nullptr;
+        void* click_user_data = nullptr;
+    } gesture;
 };
 
 namespace viewruntime::android {

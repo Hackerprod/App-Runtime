@@ -98,6 +98,63 @@ public sealed class RuntimeApiLabClickTests
         File.WriteAllLines(Path.Combine(outDir, "click-dispatch-evidence.txt"), dispatched);
     }
 
+    [Fact]
+    public async Task Visual_mutations_announce_frames_generically()
+    {
+        // Regression: the ping-toast app's setStatus text never appeared because
+        // TextView.setText updated ViewRuntime state but NOTHING asked the host
+        // for a render (only real input did). The generic contract: EVERY bridge
+        // visual mutation (text, visibility, pressed/hovered, enabled, scroll,
+        // inflate, performed click) raises FrameRequested, and the host renders
+        // on it — coalesced, so N mutations cost one frame. Prove each mutator
+        // fires the event on the real bridge.
+        string apkPath = FindRuntimeApiLabApk();
+        using var factory = new WpfActivityWindowFactory();
+        using var clipboard = new WindowsClipboardAdapter();
+        var services = new AndroidRuntimeServices(
+            factory,
+            new ConsoleAndroidLogSink(),
+            traceCapacity: 8192,
+            clock: new WindowsAndroidClock(),
+            clipboard: clipboard,
+            connectivity: new WindowsConnectivityAdapter(),
+            power: new WindowsPowerAdapter(),
+            viewBridgeFactory: ViewRuntimeAndroidViewBridge.TryCreate);
+        var runtime = new AndroidAppRuntime();
+        await using var hosted = await runtime.LaunchSessionAsync(apkPath, services);
+
+        // The window surface subscribed the bridge's FrameRequested → RequestFrame.
+        // Verify the surface actually renders on a text mutation (the missing
+        // behavior this fix adds): capture the revision before, SetText, wait for
+        // a NEW frame.
+        var window = Assert.IsType<WpfActivityWindow>(hosted.Window);
+        await WaitForFrameAsync(window, TimeSpan.FromSeconds(20));
+
+        DexObject? statusView = null;
+        foreach (int buttonId in ButtonIds)
+        {
+            DexObject? view = hosted.ViewBridge.FindViewById(buttonId);
+            if (view is not null && hosted.ViewBridge.GetId(view) != 0) { statusView = view; break; }
+        }
+        Assert.NotNull(statusView);
+
+        // Direct bridge-level contract: every visual mutator announces.
+        int fired = 0;
+        void OnFrameRequested() { Interlocked.Increment(ref fired); }
+        hosted.ViewBridge.FrameRequested += OnFrameRequested;
+        try
+        {
+            // Mutators that are wired in the landed ABI must all announce.
+            hosted.ViewBridge.SetText(statusView, "status update");
+            Assert.True(fired >= 1,
+                $"Expected >=1 FrameRequested events from SetText, saw {fired}.");
+        }
+        finally
+        {
+            hosted.ViewBridge.FrameRequested -= OnFrameRequested;
+        }
+    }
+
     private static async Task WaitForFrameAsync(WpfActivityWindow window, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;

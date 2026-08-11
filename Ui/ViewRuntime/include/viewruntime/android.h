@@ -423,6 +423,10 @@ API status_t android_view_set_padding_edges_dp(android_view_t view, thicknessf p
 API status_t android_view_set_min_size_dp(android_view_t view, float min_width_dp, float min_height_dp);
 API status_t android_view_set_content_description(android_view_t view, const char* description);
 API status_t android_view_set_click_handler(android_view_t view, const char* handler);
+/* Mark a view CLICKABLE (View.java:7868 setOnClickListener sets the flag).
+ * The host calls this when a guest OnClickListener / XML onClick is attached;
+ * the input dispatch then performs click on UP for this view. */
+API status_t android_view_set_clickable(android_view_t view, bool_t clickable);
 
 /* ── LinearLayout ──────────────────────────────────────────────────── */
 
@@ -636,6 +640,116 @@ API status_t android_view_get_background_color(android_view_t view, color_rgba* 
 /* View.getLayoutParams / getPaddingLeft equivalents (raw dp, unconverted). */
 API status_t android_view_get_layout_params(android_view_t view, android_layout_params_t* out_params);
 API status_t android_view_get_padding_dp(android_view_t view, thicknessf* out_padding_dp);
+
+/* ── Toast (android.widget.Toast, exact AOSP semantics) ─────────────── */
+
+/* Duration constants — Toast.LENGTH_SHORT / LENGTH_LONG (Toast.java). */
+#define ANDROID_TOAST_LENGTH_SHORT 0
+#define ANDROID_TOAST_LENGTH_LONG 1
+
+/* Timeouts — ToastPresenter.java SHORT_DURATION_TIMEOUT / LONG_DURATION_TIMEOUT. */
+#define ANDROID_TOAST_SHORT_TIMEOUT_MS 4000
+#define ANDROID_TOAST_LONG_TIMEOUT_MS 7000
+
+/* Default gravity — config_toastDefaultGravity = 0x51 = CENTER_HORIZONTAL |
+ * BOTTOM (AOSP config.xml). */
+#define ANDROID_TOAST_DEFAULT_GRAVITY 0x51
+
+/* Notification the host polls at its own pace (e.g. each frame):
+ * 0 = no toast active, nonzero = a toast is showing. The host should render a
+ * fresh frame while active and keep polling; ViewRuntime hides the toast
+ * itself after the SHORT/LONG timeout exactly like AOSP's TN handler
+ * (ToastPresenter.java SHORT=4000ms / LONG=7000ms). */
+API bool_t android_toast_is_active(android_ui_t ui);
+
+/* Toast.makeText(Context, CharSequence, int): creates the toast state; text
+ * copied (the session owns it), duration validated (0=SHORT, 1=LONG). */
+API status_t android_toast_make_text(android_ui_t ui, const char* text, int32_t duration);
+
+/* Toast.setText(CharSequence) / getText — the transient_notification TextView
+ * message (Toast.java setText: tv.setText(s)). */
+API status_t android_toast_set_text(android_ui_t ui, const char* text);
+
+/* Toast.setDuration / getDuration (Toast.java). */
+API status_t android_toast_set_duration(android_ui_t ui, int32_t duration);
+API int32_t android_toast_get_duration(android_ui_t ui);
+
+/* Toast.show(): activates the toast; ViewRuntime starts its SHORT/LONG
+ * timeout (the TN SHOW message + ToastPresenter timeout). */
+API status_t android_toast_show(android_ui_t ui);
+
+/* Toast.cancel(): deactivates immediately (the TN CANCEL message). */
+API status_t android_toast_cancel(android_ui_t ui);
+
+/* Render the active toast overlay (transient_notification.xml geometry) into
+ * the registered render surface AFTER the app frame. No-op when inactive.
+ * Only meaningful with a surface registered via android_ui_set_surface. */
+API void android_toast_render(android_ui_t ui);
+
+/* ── Input events (android.view.MotionEvent / View / ViewGroup exact port) ── */
+
+/* MotionEvent action constants (MotionEvent.java ACTION_* masked values). */
+#define ANDROID_ACTION_DOWN 0
+#define ANDROID_ACTION_UP 1
+#define ANDROID_ACTION_MOVE 2
+#define ANDROID_ACTION_CANCEL 3
+
+/* KeyEvent action constants (KeyEvent.java). */
+#define ANDROID_KEY_ACTION_DOWN 0
+#define ANDROID_KEY_ACTION_UP 1
+#define ANDROID_KEYCODE_ENTER 66
+#define ANDROID_KEYCODE_DPAD_CENTER 23
+#define ANDROID_KEYCODE_SPACE 62
+
+/* ViewConfiguration constants (ViewConfiguration.java): PRESSED_STATE_DURATION
+ * =64ms, DEFAULT_LONG_PRESS_TIMEOUT=400ms, TAP_TIMEOUT=100ms, TOUCH_SLOP=8dp
+ * (scaled by density — the runtime applies ui->density). */
+#define ANDROID_VIEW_CONFIG_PRESSED_STATE_DURATION_MS 64
+#define ANDROID_VIEW_CONFIG_LONG_PRESS_TIMEOUT_MS 400
+#define ANDROID_VIEW_CONFIG_TAP_TIMEOUT_MS 100
+#define ANDROID_VIEW_CONFIG_TOUCH_SLOP_DP 8.f
+
+/* Dispatch a touch event into the view tree, exactly like
+ * ViewRootImpl.deliverPointerEvent → ViewGroup.dispatchTouchEvent →
+ * View.onTouchEvent (ViewGroup.java:2647, View.java:16551/18059):
+ *   DOWN   → hit-test, fix mFirstTouchTarget, pressed (+prepressed in
+ *            scrolling containers + tap timeout), schedule long-press.
+ *   MOVE   → touch-slop check: leaving the slop cancels pressed + long-press
+ *            (View.java:18207-18245).
+ *   UP     → if pressed and no long-press performed → performClick (callback),
+ *            then unpress after pressed-state duration (View.java:18087-18150).
+ *   CANCEL → unpress + cancel timers (View.java:18195-18205).
+ * Disabled views CONSUME but do not respond (View.java:18069-18078); a view
+ * consumes only when clickable (CLICKABLE|LONG_CLICKABLE|CONTEXT_CLICKABLE). */
+API status_t android_ui_dispatch_touch(
+    android_ui_t ui, android_view_t root, int32_t action, float x, float y);
+
+/* Dispatch a key event (Enter/Space on the focused view → performClick),
+ * like ViewRootImpl.deliverKeyEvent → View.dispatchKeyEvent (Enter/Space
+ * handling matches the runtime's previous focused-view click). */
+API status_t android_ui_dispatch_key(
+    android_ui_t ui, android_view_t root, int32_t action, int32_t key_code);
+
+/* Register the click dispatch channel: when View.performClick decides to call
+ * the OnClickListener (View.java:8072), ViewRuntime invokes on_click with the
+ * view's resource id so the HOST runs the guest DEX listener. Long-press
+ * (View.performLongClick, java:8118) invokes on_long_click. Either callback
+ * may be null (that click then does nothing, like a view with no listener). */
+typedef void (*android_on_click_fn)(int32_t resource_id, void* user_data);
+API void android_ui_set_click_callback(
+    android_ui_t ui,
+    android_on_click_fn on_click,
+    android_on_click_fn on_long_click,
+    void* user_data);
+
+/* Poll gesture timers (long-press 400ms / tap 100ms / pressed-state 64ms).
+ * The host calls this from its frame loop (like the toast deadline poll);
+ * ViewRuntime fires long-press when its deadline passes. Returns nonzero when
+ * a timer fired (a frame refresh is worth it). */
+API int32_t android_ui_gesture_poll(android_ui_t ui);
+
+/* True while a touch gesture is active (a view is pressed/targeted). */
+API bool_t android_ui_gesture_active(android_ui_t ui);
 
 #ifdef __cplusplus
 }

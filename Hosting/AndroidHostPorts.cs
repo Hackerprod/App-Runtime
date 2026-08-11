@@ -8,22 +8,6 @@ using AndroidRuntime.Core.Ui;
 
 namespace AndroidRuntime.Core.Hosting;
 
-public sealed class AndroidToastLimits
-{
-    public static AndroidToastLimits Default { get; } = new();
-    public AndroidToastLimits(int maxTextLength = 512, int queueCapacity = 8, int shortDurationMilliseconds = 2000, int longDurationMilliseconds = 3500, int maxShowsPerMinute = 30)
-    {
-        if (maxTextLength <= 0 || queueCapacity <= 0 || shortDurationMilliseconds <= 0 || longDurationMilliseconds <= 0 || maxShowsPerMinute <= 0)
-            throw new ArgumentOutOfRangeException(nameof(maxTextLength), "Toast limits must be positive.");
-        MaxTextLength = maxTextLength; QueueCapacity = queueCapacity; ShortDurationMilliseconds = shortDurationMilliseconds; LongDurationMilliseconds = longDurationMilliseconds; MaxShowsPerMinute = maxShowsPerMinute;
-    }
-    public int MaxTextLength { get; }
-    public int QueueCapacity { get; }
-    public int ShortDurationMilliseconds { get; }
-    public int LongDurationMilliseconds { get; }
-    public int MaxShowsPerMinute { get; }
-}
-
 public interface IActivityWindow : IDisposable
 {
     event EventHandler? Closed;
@@ -54,20 +38,6 @@ public interface IActivityWindowFactory
         string packageName,
         string activityDescriptor,
         CancellationToken cancellationToken);
-}
-
-public interface IAndroidToastHost
-{
-    IAndroidToastNotification CreateToast(string text, int duration, CancellationToken cancellationToken);
-}
-
-public interface IAndroidToastNotification : IDisposable
-{
-    bool IsVisible { get; }
-    int Duration { get; set; }
-    string Text { get; set; }
-    void Show(CancellationToken cancellationToken);
-    void Cancel();
 }
 
 public interface IAndroidLogSink
@@ -304,7 +274,6 @@ public sealed class AndroidRuntimeServices
         int traceCapacity = 1024,
         IAndroidApiTraceSink? additionalTraceSink = null,
         int minimumLogPriority = 2,
-        AndroidToastLimits? toastLimits = null,
         AndroidPeerLimits? peerLimits = null,
         IAndroidClock? clock = null,
         IAndroidWallClock? wallClock = null,
@@ -328,7 +297,6 @@ public sealed class AndroidRuntimeServices
         if (minimumLogPriority is < 2 or > 7)
             throw new ArgumentOutOfRangeException(nameof(minimumLogPriority));
         MinimumLogPriority = minimumLogPriority;
-        ToastLimits = toastLimits ?? AndroidToastLimits.Default;
         PeerLimits = peerLimits ?? AndroidPeerLimits.Default;
         PeerLimits.Validate();
         Clock = clock ?? new StopwatchAndroidClock();
@@ -350,7 +318,6 @@ public sealed class AndroidRuntimeServices
     public int TraceCapacity { get; }
     public IAndroidApiTraceSink? AdditionalTraceSink { get; }
     public int MinimumLogPriority { get; }
-    public AndroidToastLimits ToastLimits { get; }
     public AndroidPeerLimits PeerLimits { get; }
     public IAndroidClock Clock { get; }
     public IAndroidWallClock WallClock { get; }
@@ -395,15 +362,13 @@ public sealed class InMemoryActivityWindowFactory : IActivityWindowFactory
     }
 }
 
-public sealed class InMemoryActivityWindow : IActivityWindow, IAndroidToastHost
+public sealed class InMemoryActivityWindow : IActivityWindow
 {
     private int _closed;
     public event EventHandler? Closed;
     public nint Handle => 0;
     public string Title { get; private set; } = string.Empty;
     public bool IsClosed => Volatile.Read(ref _closed) != 0;
-    public bool IsToastVisible { get; private set; }
-    public string? ToastText { get; private set; }
 
     public void SetTitle(string? title, CancellationToken cancellationToken)
     {
@@ -425,37 +390,6 @@ public sealed class InMemoryActivityWindow : IActivityWindow, IAndroidToastHost
     }
 
     public void Dispose() => Close();
-
-    public IAndroidToastNotification CreateToast(string text, int duration, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return new InMemoryToast(this, text, duration);
-    }
-
-    private sealed class InMemoryToast : IAndroidToastNotification
-    {
-        private readonly InMemoryActivityWindow _owner;
-        private string _text;
-        private int _disposed;
-        internal InMemoryToast(InMemoryActivityWindow owner, string text, int duration) { _owner = owner; _text = text; Duration = duration; }
-        public bool IsVisible { get; private set; }
-        public int Duration { get; set; }
-        public string Text { get => _text; set { _text = value; if (IsVisible) _owner.ToastText = value; } }
-        public void Show(CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (_disposed != 0 || _owner.IsClosed) throw new InvalidOperationException("Toast host is unavailable.");
-            _owner.ToastText = Text;
-            _owner.IsToastVisible = IsVisible = true;
-        }
-        public void Cancel()
-        {
-            if (!IsVisible) return;
-            IsVisible = false;
-            _owner.IsToastVisible = false;
-        }
-        public void Dispose() { if (Interlocked.Exchange(ref _disposed, 1) == 0) Cancel(); }
-    }
 }
 
 public sealed class ConsoleAndroidLogSink : IAndroidLogSink

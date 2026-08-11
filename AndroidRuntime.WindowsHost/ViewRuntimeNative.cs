@@ -193,6 +193,75 @@ internal static partial class ViewRuntimeBridgeNative
         }
         return null;
     }
+
+    // --- Toast (android.widget.Toast — exact AOSP port; state owned by ViewRuntime) ---
+
+    [LibraryImport(Dll, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int android_toast_make_text(nint ui, string? text, int duration);
+
+    [LibraryImport(Dll, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int android_toast_set_text(nint ui, string? text);
+
+    [LibraryImport(Dll)]
+    internal static partial int android_toast_set_duration(nint ui, int duration);
+
+    [LibraryImport(Dll)]
+    internal static partial int android_toast_get_duration(nint ui);
+
+    [LibraryImport(Dll)]
+    internal static partial int android_toast_show(nint ui);
+
+    [LibraryImport(Dll)]
+    internal static partial int android_toast_cancel(nint ui);
+
+    [LibraryImport(Dll)]
+    internal static partial byte android_toast_is_active(nint ui);
+
+    [LibraryImport(Dll)]
+    internal static partial void android_toast_render(nint ui);
+
+    // --- Input events (android.h:689-752 — exact AOSP gesture machine) ---
+
+    // MotionEvent action constants (MotionEvent.java ACTION_*).
+    internal const int AndroidActionDown = 0;
+    internal const int AndroidActionUp = 1;
+    internal const int AndroidActionMove = 2;
+    internal const int AndroidActionCancel = 3;
+
+    // KeyEvent action / key codes (KeyEvent.java).
+    internal const int AndroidKeyActionDown = 0;
+    internal const int AndroidKeyActionUp = 1;
+    internal const int AndroidKeyCodeEnter = 66;
+    internal const int AndroidKeyCodeDpadCenter = 23;
+    internal const int AndroidKeyCodeSpace = 62;
+
+    [LibraryImport(Dll)]
+    internal static partial int android_ui_dispatch_touch(nint ui, nint root, int action, float x, float y);
+
+    [LibraryImport(Dll)]
+    internal static partial int android_ui_dispatch_key(nint ui, nint root, int action, int key_code);
+
+    /// <summary>Native → managed click channel (android.h:738): ViewRuntime
+    /// decides performClick/performLongClick and hands the view's resource id
+    /// back; the host runs the guest DEX listener. Invoked synchronously from
+    /// inside the dispatch/poll call on the caller's thread.</summary>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void AndroidUiClickCallback(int resource_id, nint user_data);
+
+    [LibraryImport(Dll)]
+    internal static partial void android_ui_set_click_callback(
+        nint ui, nint on_click, nint on_long_click, nint user_data);
+
+    [LibraryImport(Dll)]
+    internal static partial int android_ui_gesture_poll(nint ui);
+
+    [LibraryImport(Dll)]
+    internal static partial int android_ui_gesture_active(nint ui);
+
+    /// <summary>Marks a view CLICKABLE (android.h:429, View.java:7868
+    /// setOnClickListener semantics). bool_t in the native ABI is int32_t.</summary>
+    [LibraryImport(Dll)]
+    internal static partial int android_view_set_clickable(nint view, int clickable);
 }
 
 [StructLayout(LayoutKind.Sequential)]

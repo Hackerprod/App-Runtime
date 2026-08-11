@@ -27,6 +27,15 @@ public interface IAndroidViewBridge
     /// the session shuts down. No-op for the unavailable implementation.</summary>
     void DisposeBridge();
 
+    /// <summary>Raised after a bridge operation mutated visual view state
+    /// (text, enabled, visibility, pressed/hovered, scroll, inflate, a click
+    /// that ran guest DEX). The host subscribes and renders a fresh frame;
+    /// coalescing is the host's responsibility (a frame already in flight
+    /// covers pending requests). Generic: every visual mutation announces
+    /// itself through this ONE channel instead of each binding knowing how to
+    /// reach the render loop.</summary>
+    event Action? FrameRequested;
+
     /// <summary>Binds the session interpreter + Activity + a lane-dispatch
     /// function so the bridge can invoke guest click handlers (programmatic
     /// listeners and declarative android:onClick methods) through real DEX
@@ -111,9 +120,85 @@ public interface IAndroidViewBridge
     /// view resource id that was hit, or null. ViewRuntime owns the real view
     /// bounds; this side only relays the result back to guest click dispatch.</summary>
     int? HitTest(float pixelX, float pixelY);
+
+    // ---- Toast (android.widget.Toast — exact AOSP port, state owned by
+    // ViewRuntime; this side only relays the guest API calls) ----
+
+    /// <summary>Toast.makeText: creates the toast state (text + duration).</summary>
+    void ToastMakeText(string? text, int duration);
+
+    /// <summary>Toast.setText.</summary>
+    void ToastSetText(string? text);
+
+    /// <summary>Toast.setDuration.</summary>
+    void ToastSetDuration(int duration);
+
+    /// <summary>Toast.getDuration.</summary>
+    int ToastGetDuration();
+
+    /// <summary>Toast.show — ViewRuntime starts its SHORT/LONG timeout.</summary>
+    void ToastShow();
+
+    /// <summary>Toast.cancel.</summary>
+    void ToastCancel();
+
+    /// <summary>True while a toast is showing (ViewRuntime hides it itself after
+    /// the 4000/7000ms timeout). The host polls this each frame.</summary>
+    bool ToastIsActive();
+
+    /// <summary>Render the active toast overlay over the current frame. No-op
+    /// when inactive. Call after the app frame.</summary>
+    void ToastRender();
+
+    // ---- input dispatch (ViewRuntime owns the ENTIRE gesture machine) ----
+    // The host forwards raw pointer/key events; ViewRuntime decides
+    // hit-testing, mFirstTouchTarget, touch slop, long-press, pressed visuals
+    // and the performClick/performLongClick decision. The click decision comes
+    // back through the registered click callback (DispatchClickByResourceId on
+    // this side) — never through a C# tap heuristic.
+
+    /// <summary>Forwards a MotionEvent action (AndroidInputAction.Down/Up/
+    /// Move/Cancel) with render-surface pixel coordinates.</summary>
+    void DispatchTouch(int action, float x, float y);
+
+    /// <summary>Forwards a KeyEvent (AndroidKeyCode.Enter/Space/DpadCenter).
+    /// Only the Down action triggers the native click on the focused view.</summary>
+    void DispatchKey(int action, int keyCode);
+
+    /// <summary>Ticks the native gesture timers (long-press 400ms / tap 100ms /
+    /// pressed-state 64ms). Call from the frame loop. Returns nonzero when a
+    /// timer fired (a frame refresh is worth it).</summary>
+    int GesturePoll();
+
+    /// <summary>True while a touch gesture is active (a view is pressed/
+    /// targeted) — the host keeps polling while this is true.</summary>
+    bool GestureActive { get; }
 }
 
-/// <summary>Fail-closed bridge used when no ViewRuntime-backed bridge is
+/// <summary>MotionEvent / KeyEvent action values (MotionEvent.java ACTION_*,
+/// KeyEvent.java ACTION_*). Mirror of the native ANDROID_ACTION_* /
+/// ANDROID_KEY_ACTION_* constants (android.h:692-698).</summary>
+public static class AndroidInputAction
+{
+    public const int Down = 0;
+    public const int Up = 1;
+    public const int Move = 2;
+    public const int Cancel = 3;
+    public const int KeyDown = 0;
+    public const int KeyUp = 1;
+}
+
+/// <summary>KeyEvent key codes the runtime forwards to the native key dispatch
+/// (KeyEvent.java: KEYCODE_ENTER=66 / DPAD_CENTER=23 / SPACE=62).</summary>
+public static class AndroidKeyCode
+{
+    public const int Enter = 66;
+    public const int DpadCenter = 23;
+    public const int Space = 62;
+}
+
+/// <summary>
+/// Fail-closed bridge used when no ViewRuntime-backed bridge is
 /// attached. There is deliberately NO local view behavior here: view operations
 /// throw rather than fake answers, matching the Phase-2 directive that this
 /// side has zero visual logic.</summary>
@@ -125,6 +210,7 @@ public sealed class UnavailableAndroidViewBridge : IAndroidViewBridge
 
     public bool IsAvailable => false;
     public void DisposeBridge() { }
+    public event Action? FrameRequested { add { } remove { } }
     public void AttachSession(DexInterpreter interpreter, DexObject activity, Func<Func<object?>, object?> dispatchToLane) { }
     public void SetContentView(int layoutResourceId) { Throw(); }
     public DexObject Inflate(int layoutResourceId) { Throw(); return null!; }
@@ -163,6 +249,26 @@ public sealed class UnavailableAndroidViewBridge : IAndroidViewBridge
     public bool TypedArrayGetValue(int index) { Throw(); return false; }
     public byte[]? RenderFrame(int pixelWidth, int pixelHeight, float density) => null;
     public int? HitTest(float pixelX, float pixelY) => null;
+
+    // Toast without a real ViewRuntime bridge: no-op. android.widget.Toast
+    // degrades to "nothing shown" when no UI surface exists (the AOSP app
+    // process still runs; only the transient window is absent). Throwing here
+    // would break every headless session whose APK happens to make a toast.
+    public void ToastMakeText(string? text, int duration) { }
+    public void ToastSetText(string? text) { }
+    public void ToastSetDuration(int duration) { }
+    public int ToastGetDuration() => 0;
+    public void ToastShow() { }
+    public void ToastCancel() { }
+    public bool ToastIsActive() => false;
+    public void ToastRender() { }
+
+    // Input without a real ViewRuntime bridge: no-op. No guest input can be
+    // delivered headless; the unavailable surface never forwards events.
+    public void DispatchTouch(int action, float x, float y) { }
+    public void DispatchKey(int action, int keyCode) { }
+    public int GesturePoll() => 0;
+    public bool GestureActive => false;
 
     private static void Throw()
     {

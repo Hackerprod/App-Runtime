@@ -235,6 +235,7 @@ public static class AndroidApiBindings
 		JavaUtilArraysBindings.Register(builder, state);
 		JavaLangMathBindings.Register(builder, state);
 		JavaLangRuntimeBindings.Register(builder, state);
+		JavaIoProcessBindings.Register(builder, state);
 		AndroidContentSharedPreferencesBindings.Register(builder, state);
 		RegisterWeakHashMaps(builder, state);
 		RegisterHashMaps(builder, state);
@@ -1581,6 +1582,9 @@ public static class AndroidApiBindings
 
 	private static void RegisterToasts(AndroidApiRegistryBuilder builder, AndroidFrameworkState state)
 	{
+		// android.widget.Toast — EXACT AOSP port owned by ViewRuntime (C++). This
+		// side only relays the guest API calls through the view bridge; there is
+		// NO toast host/peer/queue/timer here anymore (the UI layer is C++).
 		builder.Register(Api("Landroid/widget/Toast;", "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			if (!invocation.IsMainLane)
@@ -1593,57 +1597,47 @@ public static class AndroidApiBindings
 				throw new ArgumentException("Toast context does not belong to this session.");
 			}
 			string text = AsText(state, args[1]) ?? string.Empty;
-			if (text.Length > state.ToastLimits.MaxTextLength)
-			{
-				throw new ArgumentOutOfRangeException("args", $"Toast text exceeds {state.ToastLimits.MaxTextLength} characters.");
-			}
 			int duration = RequireToastDuration(args[2]);
-			DexObject activity = state.Activity ?? throw new InvalidOperationException("Session Activity is not attached.");
-			IActivityWindow activityWindow = RequireWindow(state, activity);
-			IAndroidToastHost toastHost = activityWindow as IAndroidToastHost;
-			if (toastHost == null)
-			{
-				throw new AndroidApiUnavailableException(invocation.ResolvedApi, "Activity window does not provide a text Toast host.");
-			}
-			DexObject dexObject2 = new DexObject("Landroid/widget/Toast;");
-			state.Toasts.AddCreated(dexObject2, () => new ToastPeer
-			{
-				Notification = toastHost.CreateToast(text, duration, invocation.CancellationToken)
-			});
-			return dexObject2;
+			state.ViewBridge.ToastMakeText(text, duration);
+			DexObject toastObject = new DexObject("Landroid/widget/Toast;");
+			// The guest Toast object is a plain marker: all state (text, duration,
+			// active, timeout) lives in ViewRuntime's session toast state, exactly
+			// like AOSP's mText/mDuration on the Toast instance.
+			state.ToastObjects.AddCreated(toastObject, () => new ToastPeer());
+			return toastObject;
 		});
 		builder.Register(Api("Landroid/widget/Toast;", "show", "()V"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			state.Toasts.Get(Receiver(args)).Notification.Show(invocation.CancellationToken);
+			Receiver(args);
+			state.ViewBridge.ToastShow();
 			return null!;
 		});
 		builder.Register(Api("Landroid/widget/Toast;", "cancel", "()V"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			state.Toasts.Get(Receiver(args)).Notification.Cancel();
+			Receiver(args);
+			state.ViewBridge.ToastCancel();
 			return null!;
 		});
 		builder.Register(Api("Landroid/widget/Toast;", "getDuration", "()I"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			return state.Toasts.Get(Receiver(args)).Notification.Duration;
+			Receiver(args);
+			return state.ViewBridge.ToastGetDuration();
 		});
 		builder.Register(Api("Landroid/widget/Toast;", "setDuration", "(I)V"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			state.Toasts.Get(Receiver(args)).Notification.Duration = RequireToastDuration(args[1]);
+			Receiver(args);
+			state.ViewBridge.ToastSetDuration(RequireToastDuration(args[1]));
 			return null!;
 		});
 		builder.Register(Api("Landroid/widget/Toast;", "setText", "(Ljava/lang/CharSequence;)V"), delegate(AndroidApiInvocation invocation, object[] args)
 		{
 			RequireMainLane(invocation);
-			string text = AsText(state, args[1]) ?? string.Empty;
-			if (text.Length > state.ToastLimits.MaxTextLength)
-			{
-				throw new ArgumentOutOfRangeException("args", $"Toast text exceeds {state.ToastLimits.MaxTextLength} characters.");
-			}
-			state.Toasts.Get(Receiver(args)).Notification.Text = text;
+			Receiver(args);
+			state.ViewBridge.ToastSetText(AsText(state, args[1]) ?? string.Empty);
 			return null!;
 		});
 	}

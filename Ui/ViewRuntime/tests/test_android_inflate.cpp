@@ -1,9 +1,11 @@
 #include <viewruntime/android.h>
 #include <viewruntime/viewruntime_backend.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 
 /* Phase 2 bridge: inflate from a parsed element tree + resource callbacks +
  * forwarding getters + style/theme chain resolution. */
@@ -1452,6 +1454,241 @@ void test_inflate_per_corner_uniform_default_and_black_stroke() {
     android_ui_destroy(ui);
 }
 
+/* Regression (host bridge): the WindowsHost flow is measure → layout → record
+ * → render, then a guest mutation (setText), then the SAME cycle again. The
+ * second render crashed (AccessViolation) in android_ui_render on the real
+ * RuntimeApiLab tree (ScrollView > LinearLayout > TextView children). Minimal
+ * repro with the same shape: ScrollView root, TextView child, setText, second
+ * record/render cycle. */
+void test_inflate_settext_then_rerender() {
+    android_ui_options_t opts{};
+    opts.density = 1.f;
+    opts.scaled_density = 1.f;
+    android_ui_t ui = nullptr;
+    expect_ok(android_ui_create(&opts, &ui), "create ui");
+    android_ui_set_resource_bridge(ui, stub_resolve_resource,
+                                   stub_resolve_style, stub_fetch_file, nullptr);
+    void* surface = viewruntime_surface_create(nullptr);
+    expect(surface != nullptr, "surface created");
+    viewruntime_surface_resize(surface, 40, 40, 1.f);
+    android_ui_set_surface(ui, surface);
+
+    android_attr_t scroll_attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_STRING, "match_parent", 0, 0.f, 0, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_STRING, "match_parent", 0, 0.f, 0, 0}),
+    };
+    android_attr_t tv_attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_STRING, "wrap_content", 0, 0.f, 0, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_STRING, "wrap_content", 0, 0.f, 0, 0}),
+        attr_lit("android:text", {ANDROID_RAW_TYPE_STRING, "old", 0, 0.f, 0, 0}),
+        attr_lit("android:textSize",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 16.f, ANDROID_DIMEN_UNIT_SP, 0}),
+    };
+    android_node_t nodes[] = {
+        {"ScrollView", 0, -1, 0, 2, scroll_attrs},
+        {"TextView", 0x7f0f0001, 0, 0, 4, tv_attrs},
+    };
+    android_view_t root = nullptr;
+    expect_ok(android_ui_inflate(ui, nodes, 2, &root), "inflate");
+
+    auto cycle = [&](const char* label) {
+        expect_ok(android_ui_measure(ui, root, 40.f, 40.f), label);
+        expect_ok(android_ui_layout(ui, root, 0.f, 0.f, 40.f, 40.f), label);
+        display_list_t list = nullptr;
+        expect_ok(android_ui_record(ui, root, &list), label);
+        expect_ok(android_ui_render(ui, list), label);
+        display_list_destroy(list);
+    };
+    cycle("cycle 1");
+    android_view_t tv = android_ui_find_view_by_id(ui, 0x7f0f0001);
+    expect(tv != nullptr, "textview found");
+    if (tv != nullptr) {
+        expect_ok(android_view_set_text(tv, "Ejecutando ping a google.com"), "set text");
+        cycle("cycle 2 (no crash)");
+    }
+
+    viewruntime_surface_destroy(surface);
+    android_ui_destroy(ui);
+}
+
+/* Toast (android.widget.Toast exact port): makeText → show → active →
+ * render overlay → timeout deactivates. Verifies the AOSP constants:
+ * SHORT timeout 4000ms, default gravity BOTTOM|CENTER, y offset 48dp, panel
+ * drawn over the surface. Uses a tiny SHORT window via direct deadline
+ * manipulation? No — the deadline is real; the test checks active right after
+ * show, render produces the panel, and after >4000ms is_active is false. */
+void test_toast_lifecycle_and_render() {
+    android_ui_options_t opts{};
+    opts.density = 1.f;
+    opts.scaled_density = 1.f;
+    android_ui_t ui = nullptr;
+    expect_ok(android_ui_create(&opts, &ui), "create ui");
+    android_ui_set_resource_bridge(ui, stub_resolve_resource,
+                                   stub_resolve_style, stub_fetch_file, nullptr);
+    void* surface = viewruntime_surface_create(nullptr);
+    expect(surface != nullptr, "surface created");
+    viewruntime_surface_resize(surface, 200, 200, 1.f);
+    android_ui_set_surface(ui, surface);
+
+    /* Not active before makeText. */
+    expect(android_toast_is_active(ui) == FALSE, "inactive before makeText");
+
+    /* makeText with an invalid duration must fail (AOSP LENGTH_* domain). */
+    expect(android_toast_make_text(ui, "ping", 7) != OK, "invalid duration rejected");
+
+    /* makeText(SHORT) + show → active. */
+    expect_ok(android_toast_make_text(ui, "Ejecutando ping a google.com", ANDROID_TOAST_LENGTH_SHORT),
+              "makeText short");
+    expect(android_toast_is_active(ui) == FALSE, "inactive until show");
+    expect_ok(android_toast_show(ui), "show");
+    expect(android_toast_is_active(ui) == TRUE, "active after show");
+    expect(android_toast_get_duration(ui) == ANDROID_TOAST_LENGTH_SHORT, "duration short");
+
+    /* Render the overlay: a dark panel near the bottom must appear (bottom
+     * center, y offset 48dp — on a 200px surface the panel bottom sits at
+     * 200-48=152). The message text is light; the panel background dark. */
+    viewruntime_frame_begin(surface);
+    android_toast_render(ui);
+    viewruntime_frame_end(surface);
+    const uint8_t* px = nullptr;
+    int pitch = 0, w = 0, h = 0;
+    viewruntime_surface_pixels(surface, &px, &pitch, &w, &h);
+    auto alpha_at = [&](int x, int y) -> int { return px[y * pitch + x * 4 + 3]; };
+    auto red_at = [&](int x, int y) -> int { return px[y * pitch + x * 4 + 2]; };
+    /* Center of the panel area (dark, opaque): around (100, ~130) given the
+     * message width. Verify the panel exists: SOME dark pixel in the lower
+     * half below the 48dp offset, none above it. */
+    bool found_panel = false, found_above = false;
+    for (int y = 60; y < 152; ++y)
+        for (int x = 0; x < 200; ++x)
+            if (alpha_at(x, y) > 200 && red_at(x, y) < 100) found_panel = true;
+    for (int y = 0; y < 55; ++y)
+        for (int x = 0; x < 200; ++x)
+            if (alpha_at(x, y) > 200) found_above = true;
+    expect(found_panel, "toast panel rendered in the bottom region");
+    expect(!found_above, "no toast above the 48dp y offset region");
+
+    /* setText updates the message (getText path is the same store). */
+    expect_ok(android_toast_set_text(ui, "nuevo"), "setText");
+
+    /* cancel → inactive immediately. */
+    expect_ok(android_toast_cancel(ui), "cancel");
+    expect(android_toast_is_active(ui) == FALSE, "inactive after cancel");
+
+    /* LONG duration survives >4000ms but expires before 7000ms: show LONG,
+     * sleep 4.2s, still active; then simulate timeout by re-showing with the
+     * deadline already past (direct store) is not possible via API, so verify
+     * the timeout path by waiting for SHORT expiry in a second run. */
+    expect_ok(android_toast_make_text(ui, "largo", ANDROID_TOAST_LENGTH_LONG), "makeText long");
+    expect_ok(android_toast_show(ui), "show long");
+    expect(android_toast_is_active(ui) == TRUE, "long active immediately");
+    /* Short-timeout check: make a SHORT toast, wait past 4000ms, inactive. */
+    expect_ok(android_toast_make_text(ui, "corto", ANDROID_TOAST_LENGTH_SHORT), "makeText short2");
+    expect_ok(android_toast_show(ui), "show short2");
+    expect(android_toast_is_active(ui) == TRUE, "short active immediately");
+    std::this_thread::sleep_for(std::chrono::milliseconds(4200));
+    expect(android_toast_is_active(ui) == FALSE, "short toast expired after 4.2s");
+
+    viewruntime_surface_destroy(surface);
+    android_ui_destroy(ui);
+}
+
+/* Input dispatch (View.dispatchTouchEvent/onTouchEvent exact port):
+ * DOWN → fix target + press; UP on the same target → performClick callback;
+ * MOVE beyond touch slop cancels the tap; disabled consumes without clicking;
+ * key Enter → click the focused view. */
+void test_input_dispatch_tap_and_slop() {
+    android_ui_options_t opts{};
+    opts.density = 1.f;
+    opts.scaled_density = 1.f;
+    android_ui_t ui = nullptr;
+    expect_ok(android_ui_create(&opts, &ui), "create ui");
+    android_ui_set_resource_bridge(ui, stub_resolve_resource,
+                                   stub_resolve_style, stub_fetch_file, nullptr);
+    void* surface = viewruntime_surface_create(nullptr);
+    expect(surface != nullptr, "surface created");
+    viewruntime_surface_resize(surface, 200, 200, 1.f);
+    android_ui_set_surface(ui, surface);
+
+    /* A clickable Button at (10,10,100,40) inside a FrameLayout. */
+    android_attr_t root_attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_STRING, "match_parent", 0, 0.f, 0, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_STRING, "match_parent", 0, 0.f, 0, 0}),
+    };
+    android_attr_t btn_attrs[] = {
+        attr_lit("android:layout_width",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 100.f, ANDROID_DIMEN_UNIT_DIP, 0}),
+        attr_lit("android:layout_height",
+                 {ANDROID_RAW_TYPE_DIMENSION, nullptr, 0, 40.f, ANDROID_DIMEN_UNIT_DIP, 0}),
+        attr_lit("android:text", {ANDROID_RAW_TYPE_STRING, "Ping", 0, 0.f, 0, 0}),
+    };
+    android_node_t nodes[] = {
+        {"FrameLayout", 0, -1, 0, 2, root_attrs},
+        {"Button", 0x7f0f0100, 0, 0, 3, btn_attrs},
+    };
+    android_view_t root = nullptr;
+    expect_ok(android_ui_inflate(ui, nodes, 2, &root), "inflate");
+    expect_ok(android_ui_measure(ui, root, 200.f, 200.f), "measure");
+    expect_ok(android_ui_layout(ui, root, 0.f, 0.f, 200.f, 200.f), "layout");
+
+    android_view_t btn = android_ui_find_view_by_id(ui, 0x7f0f0100);
+    expect(btn != nullptr, "button found");
+    expect_ok(android_view_set_clickable(btn, TRUE), "set clickable");
+
+    int clicks = 0, long_clicks = 0;
+    struct Ctx { int* clicks; int* long_clicks; } ctx{&clicks, &long_clicks};
+    auto on_click = [](int32_t /*id*/, void* ud) {
+        auto* c = static_cast<Ctx*>(ud);
+        ++(*c->clicks);
+    };
+    auto on_long = [](int32_t /*id*/, void* ud) {
+        auto* c = static_cast<Ctx*>(ud);
+        ++(*c->long_clicks);
+    };
+    android_ui_set_click_callback(ui, on_click, on_long, &ctx);
+
+    /* Tap inside the button → click. */
+    expect_ok(android_ui_dispatch_touch(ui, root, ANDROID_ACTION_DOWN, 30.f, 30.f), "down");
+    expect(android_ui_gesture_active(ui) == TRUE, "gesture active after down");
+    expect_ok(android_ui_dispatch_touch(ui, root, ANDROID_ACTION_UP, 30.f, 30.f), "up");
+    expect(clicks == 1, "tap produced exactly one click");
+    expect(android_ui_gesture_active(ui) == FALSE, "gesture ended after up");
+
+    /* MOVE beyond touch slop (8dp) cancels the tap. */
+    expect_ok(android_ui_dispatch_touch(ui, root, ANDROID_ACTION_DOWN, 30.f, 30.f), "down2");
+    expect_ok(android_ui_dispatch_touch(ui, root, ANDROID_ACTION_MOVE, 60.f, 60.f), "move-out");
+    expect_ok(android_ui_dispatch_touch(ui, root, ANDROID_ACTION_UP, 60.f, 60.f), "up2");
+    expect(clicks == 1, "slop-exceeded move must NOT click");
+
+    /* Click outside the button → no click. */
+    expect_ok(android_ui_dispatch_touch(ui, root, ANDROID_ACTION_DOWN, 150.f, 150.f), "down3");
+    expect_ok(android_ui_dispatch_touch(ui, root, ANDROID_ACTION_UP, 150.f, 150.f), "up3");
+    expect(clicks == 1, "tap outside must NOT click");
+
+    /* Disabled button consumes but does not click (View.java:18069-18078). */
+    expect_ok(android_view_set_enabled(btn, FALSE), "disable");
+    expect_ok(android_ui_dispatch_touch(ui, root, ANDROID_ACTION_DOWN, 30.f, 30.f), "down4");
+    expect_ok(android_ui_dispatch_touch(ui, root, ANDROID_ACTION_UP, 30.f, 30.f), "up4");
+    expect(clicks == 1, "disabled button must NOT click");
+    expect_ok(android_view_set_enabled(btn, TRUE), "re-enable");
+
+    /* Key Enter on the focused view (after a DOWN) → click. */
+    expect_ok(android_ui_dispatch_touch(ui, root, ANDROID_ACTION_DOWN, 30.f, 30.f), "down5");
+    expect_ok(android_ui_dispatch_touch(ui, root, ANDROID_ACTION_UP, 30.f, 30.f), "up5");
+    expect(clicks == 2, "tap 2 clicked");
+    expect_ok(android_ui_dispatch_key(ui, root, ANDROID_KEY_ACTION_DOWN, ANDROID_KEYCODE_ENTER), "key enter");
+    expect(clicks == 3, "Enter on focused view clicked");
+
+    viewruntime_surface_destroy(surface);
+    android_ui_destroy(ui);
+}
+
 } // namespace
 
 int main() {
@@ -1470,6 +1707,9 @@ int main() {
     test_inflate_button_pressed_color_swap();
     test_inflate_text_with_emoji_completes();
     test_inflate_per_corner_uniform_default_and_black_stroke();
+    test_inflate_settext_then_rerender();
+    test_toast_lifecycle_and_render();
+    test_input_dispatch_tap_and_slop();
     if (g_failures != 0) {
         std::fprintf(stderr, "%d FAILURES\n", g_failures);
         return 1;

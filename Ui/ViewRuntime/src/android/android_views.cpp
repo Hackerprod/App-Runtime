@@ -318,6 +318,16 @@ API status_t android_view_set_click_handler(
     android_view_t view, const char* handler) {
     if (!view) return ERROR_NULL_ARG;
     view->click_handler = handler ? handler : "";
+    /* View.java:7868 setOnClickListener sets CLICKABLE; the XML onClick
+     * (DeclaredOnClickListener) also makes the view clickable. */
+    if (handler && *handler) view->clickable = true;
+    return OK;
+}
+
+API status_t android_view_set_clickable(
+    android_view_t view, bool_t clickable) {
+    if (!view) return ERROR_NULL_ARG;
+    view->clickable = clickable != FALSE;
     return OK;
 }
 

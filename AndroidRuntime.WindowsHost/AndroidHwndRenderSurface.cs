@@ -8,23 +8,21 @@ using System.Windows.Threading;
 using AndroidRuntime.Core;
 using AndroidRuntime.Core.Dex;
 using AndroidRuntime.Core.Hosting;
+using AndroidRuntime.Core.Ui;
 
 namespace AndroidRuntime.WindowsHost;
 
 internal sealed partial class AndroidHwndRenderSurface : HwndHost
 {
-    private const int WsChild = 0x40000000, WsVisible = 0x10000000, WsTabStop = 0x00010000;
+    private const int WsChild = 0x40000000, WsVisible = 0x10000000, WsTabStop = 0x00010000, SsNotify = 0x00000100;
     private const int WmPaint = 0x000F, WmEraseBackground = 0x0014, WmLButtonDown = 0x0201, WmLButtonUp = 0x0202, WmKeyDown = 0x0100, WmMouseMove = 0x0200, WmMouseLeave = 0x02A3, WmMouseWheel = 0x020A;
     private const int VkReturn = 0x0D, VkSpace = 0x20;
     private const uint TmeLeave = 0x00000002;
     private readonly WindowsRetainedRenderer _renderer = new();
     private readonly RetainedFrameScheduler _scheduler;
     private AndroidHostedActivitySession? _session;
+    private AndroidInputManager? _input;
     private nint _hwnd;
-    private int? _pressedId;
-    private int? _focusedId;
-    private int? _hoveredId;
-    private float _scrollY;
     private long _revision;
     private int _frameInFlight, _frameAgain, _disposed;
 
@@ -45,18 +43,38 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
     internal int? HitTest(float pixelX, float pixelY) => _session?.ViewBridge.HitTest(pixelX, pixelY);
     internal void InjectPointerClick(float pixelX, float pixelY)
     {
-        if (!InputEnabled) return;
-        int? pressed = _session?.ViewBridge.HitTest(pixelX, pixelY);
-        int? released = _session?.ViewBridge.HitTest(pixelX, pixelY);
-        if (pressed is int id && released == pressed) { _focusedId = id; EnqueueClick(id); }
+        if (_input is null || !_input.InputEnabled) return;
+        _input.HandlePointerDown(pixelX, pixelY);
+        _input.HandlePointerUp(pixelX, pixelY);
     }
-    internal void Attach(AndroidHostedActivitySession session) { _session = session ?? throw new ArgumentNullException(nameof(session)); RequestFrame(); }
-    internal void Detach(AndroidHostedActivitySession session) { if (ReferenceEquals(_session, session)) _session = null; }
-    internal void SetToast(string? text) { _renderer.SetToast(text); Invalidate(); }
+    internal void Attach(AndroidHostedActivitySession session)
+    {
+        _session = session ?? throw new ArgumentNullException(nameof(session));
+        _input = new AndroidInputManager(session, RequestFrame);
+        // Generic invalidate channel: ANY bridge mutation that changes visual
+        // view state (setText, visibility, pressed, scroll, click handlers that
+        // ran DEX…) announces through IAndroidViewBridge.FrameRequested. The
+        // host just renders on every request — RequestFrame coalesces, so N
+        // mutations in one guest turn cost exactly one frame. This closes the
+        // gap where setStatus-style guest mutations updated ViewRuntime state
+        // but nothing asked for a render (only real input did).
+        if (session.ViewBridge is { } bridge)
+            bridge.FrameRequested += RequestFrame;
+        RequestFrame();
+    }
+    internal void Detach(AndroidHostedActivitySession session)
+    {
+        if (ReferenceEquals(_session, session))
+        {
+            if (_session is { ViewBridge: { } bridge })
+                bridge.FrameRequested -= RequestFrame;
+            _session = null; _input?.Dispose(); _input = null;
+        }
+    }
 
     protected override HandleRef BuildWindowCore(HandleRef hwndParent)
     {
-        _hwnd = Native.CreateWindowEx(0, "STATIC", string.Empty, WsChild | WsVisible | WsTabStop, 0, 0, 1, 1, hwndParent.Handle, 0, 0, 0);
+        _hwnd = Native.CreateWindowEx(0, "STATIC", string.Empty, WsChild | WsVisible | WsTabStop | SsNotify, 0, 0, 1, 1, hwndParent.Handle, 0, 0, 0);
         if (_hwnd == 0) throw new InvalidOperationException($"Unable to create Android render child HWND ({Marshal.GetLastWin32Error()}).");
         return new HandleRef(this, _hwnd);
     }
@@ -74,113 +92,60 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
                 try { _renderer.Present(paint.Hdc); } finally { Native.EndPaint(hwnd, ref paint); }
                 return 0;
             case WmLButtonDown:
-                if (!InputEnabled) break;
+                if (_input is not { } input || !input.InputEnabled) break;
                 Native.SetFocus(hwnd); Native.SetCapture(hwnd);
-                _pressedId = _session?.ViewBridge.HitTest(SignedLow(lParam), SignedHigh(lParam));
-                _focusedId = _pressedId;
-                if (_pressedId is int downPressedId) { SetPressed(downPressedId, true); RequestFrame(); }
+                input.HandlePointerDown(ToRenderX(lParam), ToRenderY(lParam));
                 handled = true; return 0;
             case WmLButtonUp:
-                if (!InputEnabled) break;
+                if (_input is not { } inputUp || !inputUp.InputEnabled) break;
                 Native.ReleaseCapture();
-                int? released = _session?.ViewBridge.HitTest(SignedLow(lParam), SignedHigh(lParam));
-                int? invoke = released == _pressedId ? released : null;
-                // Clear the press on the id that was pressed at DOWN, wherever
-                // the pointer is released (real Android cancels the press when
-                // released outside the view).
-                if (_pressedId is int upPressedId) { SetPressed(upPressedId, false); RequestFrame(); }
-                _pressedId = null;
-                if (invoke is int id) EnqueueClick(id);
+                inputUp.HandlePointerUp(ToRenderX(lParam), ToRenderY(lParam));
                 handled = true; return 0;
             case WmMouseMove:
-                if (!InputEnabled) break;
+                if (_input is not { } inputMove || !inputMove.InputEnabled) break;
                 // Arm leave-tracking so Windows posts WM_MOUSELEAVE when the
                 // pointer leaves the surface (standard TrackMouseEvent pattern;
                 // re-arming on every move is safe and resets the leave timer).
                 var trackMouse = new TrackMouseEventStruct { Size = (uint)Marshal.SizeOf<TrackMouseEventStruct>(), Flags = TmeLeave, Hwnd = hwnd };
                 Native.TrackMouseEvent(ref trackMouse);
-                int? hovered = _session?.ViewBridge.HitTest(SignedLow(lParam), SignedHigh(lParam));
-                if (hovered != _hoveredId)
-                {
-                    if (_hoveredId is int oldId) SetHovered(oldId, false);
-                    _hoveredId = hovered;
-                    if (hovered is int newId) SetHovered(newId, true);
-                    RequestFrame();
-                }
+                inputMove.HandlePointerMove(ToRenderX(lParam), ToRenderY(lParam));
                 handled = true; return 0;
             case WmMouseLeave:
-                if (_hoveredId is int leaveId) { SetHovered(leaveId, false); _hoveredId = null; RequestFrame(); }
+                _input?.HandlePointerLeave();
                 handled = true; return 0;
             case WmMouseWheel:
-                if (!InputEnabled) break;
+                if (_input is not { } inputWheel || !inputWheel.InputEnabled) break;
                 // lParam is in SCREEN coordinates for WM_MOUSEWHEEL (unlike the
-                // button messages) — convert to surface-client before hit-test.
+                // button messages) — convert to surface-client, then render px.
                 int wheelDelta = (short)((long)wParam >> 16); // GET_WHEEL_DELTA, ±120/notch
                 if (wheelDelta != 0)
                 {
                     var wheelPoint = new PointStruct { X = SignedLow(lParam), Y = SignedHigh(lParam) };
                     Native.ScreenToClient(hwnd, ref wheelPoint);
-                    AndroidHostedActivitySession? wheelSession = _session;
-                    if (wheelSession is null) break;
-                    int? wheelHit = wheelSession.ViewBridge.HitTest(wheelPoint.X, wheelPoint.Y);
-                    if (wheelHit is int wheelId && wheelId != 0)
-                    {
-                        DexObject? wheelView = wheelSession.ViewBridge.FindViewById(wheelId);
-                        if (wheelView is not null)
-                        {
-                            // Accumulate raw wheel delta as pixels: Windows default
-                            // is 3 lines per notch and the standard line height is
-                            // ~40px, so 120px/notch == the raw delta; partial deltas
-                            // from touchpads accumulate naturally. ViewRuntime clamps
-                            // the range on its layout side. Horizontal scroll is not
-                            // wired yet — x stays 0.
-                            _scrollY += wheelDelta;
-                            wheelSession.ViewBridge.SetScrollOffset(wheelView, 0f, _scrollY);
-                            RequestFrame();
-                        }
-                    }
+                    inputWheel.HandleScroll(ToRenderX(wheelPoint.X), ToRenderY(wheelPoint.Y), wheelDelta);
                 }
                 handled = true; return 0;
-            case WmKeyDown when InputEnabled && (wParam == VkReturn || wParam == VkSpace):
-                if (_focusedId is int focused) EnqueueClick(focused);
+            case WmKeyDown when _input is { InputEnabled: true } inputKey && (wParam == VkReturn || wParam == VkSpace):
+                // Win32 VK → Android KeyEvent key code (KeyEvent.java). Only the
+                // DOWN matters; the native key dispatch ignores KEY_UP.
+                inputKey.HandleKeyPress(wParam == VkReturn ? AndroidKeyCode.Enter : AndroidKeyCode.Space);
                 handled = true; return 0;
         }
         return base.WndProc(hwnd, msg, wParam, lParam, ref handled);
     }
 
-    private bool InputEnabled => Volatile.Read(ref _disposed) == 0 && _session?.Session.State == AndroidActivityState.Resumed;
-
-    private void EnqueueClick(int id)
-    {
-        AndroidHostedActivitySession? session = _session;
-        if (session is null) return;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                DexObject? view = session.ViewBridge.FindViewById(id);
-                if (view is not null && session.ViewBridge.PerformClick(view)) RequestFrame();
-            }
-            catch (ObjectDisposedException) { }
-            catch (InvalidOperationException) when (!InputEnabled) { }
-        });
-    }
-
-    private void SetPressed(int id, bool pressed)
-    {
-        AndroidHostedActivitySession? session = _session;
-        if (session is null) return;
-        DexObject? view = session.ViewBridge.FindViewById(id);
-        if (view is not null) session.ViewBridge.SetPressed(view, pressed);
-    }
-
-    private void SetHovered(int id, bool hovered)
-    {
-        AndroidHostedActivitySession? session = _session;
-        if (session is null) return;
-        DexObject? view = session.ViewBridge.FindViewById(id);
-        if (view is not null) session.ViewBridge.SetHovered(view, hovered);
-    }
+    /// <summary>Raw child-client coordinate straight through to the render
+    /// space. The process is PerMonitorV2-aware (app.manifest), so Win32
+    /// lParam/screen coordinates are already PHYSICAL pixels, and the render
+    /// frame is sized in those same physical pixels (DIP * DpiScale, see
+    /// RequestFrame). No DPI conversion may be applied here — scaling again
+    /// would overshoot the frame and hit-test null. (Regression fixed: the
+    /// previous ToRender multiplied by DpiScale, breaking every click at
+    /// DPI &gt; 1.)</summary>
+    private float ToRenderX(nint lParam) => SignedLow(lParam);
+    private float ToRenderY(nint lParam) => SignedHigh(lParam);
+    private float ToRenderX(int clientX) => clientX;
+    private float ToRenderY(int clientY) => clientY;
 
     internal void RequestFrame()
     {
@@ -196,11 +161,30 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
         {
             try
             {
+                // Gesture timers (long-press 400ms / tap 100ms / pressed-state
+                // 64ms) tick from the frame loop; the input path also polls
+                // while a gesture is active (AndroidInputManager), so a held
+                // press advances even with no frames arriving.
+                try { session.ViewBridge.GesturePoll(); } catch { }
                 // Phase 2: ViewRuntime renders the whole frame; this side just
                 // presents the finished buffer. No bridge attached -> no frame.
                 byte[]? pixels = session.ViewBridge.RenderFrame(pixelWidth, pixelHeight, density);
                 if (pixels is not null)
                     _scheduler.Publish(new WindowsRetainedFrame(Interlocked.Increment(ref _revision), pixelWidth, pixelHeight, density, pixels, string.Empty));
+                // Toast expiry polling: android.widget.Toast lives entirely in
+                // ViewRuntime, which deactivates it itself after SHORT/LONG
+                // (4000/7000ms). Ask for one more frame shortly after the
+                // deadline so the overlay disappears without waiting for input.
+                if (session.ViewBridge.ToastIsActive())
+                {
+                    int delayMs = 4500; /* > SHORT (4000); LONG re-polls via next frame */
+                    if (Volatile.Read(ref _disposed) == 0)
+                        _ = Dispatcher.BeginInvoke(async () =>
+                        {
+                            await Task.Delay(delayMs);
+                            if (Volatile.Read(ref _disposed) == 0) RequestFrame();
+                        }, DispatcherPriority.Background);
+                }
             }
             catch (InvalidOperationException) when (session.Session.State != AndroidActivityState.Resumed) { }
             catch (ObjectDisposedException) { }
@@ -219,7 +203,7 @@ internal sealed partial class AndroidHwndRenderSurface : HwndHost
 
     protected override void Dispose(bool disposing)
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0) { _session = null; _scheduler.Dispose(); _renderer.Dispose(); }
+        if (Interlocked.Exchange(ref _disposed, 1) == 0) { _session = null; _input?.Dispose(); _input = null; _scheduler.Dispose(); _renderer.Dispose(); }
         base.Dispose(disposing);
     }
 

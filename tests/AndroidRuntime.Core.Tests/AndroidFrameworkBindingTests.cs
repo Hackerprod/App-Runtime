@@ -1,6 +1,7 @@
 using AndroidRuntime.Core.ApiLayer;
 using AndroidRuntime.Core.Dex;
 using AndroidRuntime.Core.Hosting;
+using AndroidRuntime.Core.Ui;
 
 namespace AndroidRuntime.Core.Tests;
 
@@ -170,24 +171,85 @@ public sealed class AndroidFrameworkBindingTests
     }
 
     [Fact]
-    public void Text_toast_uses_activity_window_peer_and_supports_show_cancel_and_mutation()
+    public void Text_toast_relays_to_the_view_bridge_for_show_cancel_and_mutation()
     {
         var peers = new ActivityWindowPeers();
         var activity = new DexObject("Lorg/example/Main;");
         var window = new InMemoryActivityWindow();
         peers.Associate(activity, window);
-        var state = new AndroidFrameworkState("s", "org.example", activity.TypeDescriptor, peers);
+        var bridge = new RecordingToastBridge();
+        var state = new AndroidFrameworkState("s", "org.example", activity.TypeDescriptor, peers, viewBridge: bridge);
         state.AttachActivity(activity);
         var registry = AndroidApiBindings.CreateBuilder(state, new RecordingLogSink()).Build();
 
         var toast = Assert.IsType<DexObject>(Invoke(registry, state, "Landroid/widget/Toast;", "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;", AndroidInvokeKind.Static, activity, "Hello", 0));
-        Invoke(registry, state, "Landroid/widget/Toast;", "show", "()V", AndroidInvokeKind.Virtual, toast);
-        Assert.True(window.IsToastVisible);
-        Assert.Equal("Hello", window.ToastText);
+        Assert.Equal("Hello", bridge.MadeText);
         Invoke(registry, state, "Landroid/widget/Toast;", "setText", "(Ljava/lang/CharSequence;)V", AndroidInvokeKind.Virtual, toast, "Changed");
-        Assert.Equal("Changed", window.ToastText);
+        Assert.Equal("Changed", bridge.MadeText);
+        Invoke(registry, state, "Landroid/widget/Toast;", "show", "()V", AndroidInvokeKind.Virtual, toast);
         Invoke(registry, state, "Landroid/widget/Toast;", "cancel", "()V", AndroidInvokeKind.Virtual, toast);
-        Assert.False(window.IsToastVisible);
+        Assert.Equal(1, bridge.ShowCount);
+        Assert.Equal(1, bridge.CancelCount);
+    }
+
+    private sealed class RecordingToastBridge : IAndroidViewBridge
+    {
+        public string? MadeText { get; private set; }
+        public int ShowCount { get; private set; }
+        public int CancelCount { get; private set; }
+        public bool IsAvailable => true;
+        public event Action? FrameRequested { add { } remove { } }
+        public void DisposeBridge() { }
+        public void AttachSession(DexInterpreter interpreter, DexObject activity, Func<Func<object?>, object?> dispatchToLane) { }
+        public void SetContentView(int layoutResourceId) { }
+        public DexObject Inflate(int layoutResourceId) => new("Landroid/view/View;");
+        public DexObject? FindViewById(int id, DexObject? receiver = null) => null;
+        public int GetId(DexObject view) => 0;
+        public void SetEnabled(DexObject view, bool enabled) { }
+        public bool IsEnabled(DexObject view) => true;
+        public void SetVisibility(DexObject view, int visibility) { }
+        public int GetVisibility(DexObject view) => 0;
+        public void SetPressed(DexObject view, bool pressed) { }
+        public void SetHovered(DexObject view, bool hovered) { }
+        public void SetScrollOffset(DexObject view, float x, float y) { }
+        public void SetOnClickListener(DexObject view, DexObject? listener) { }
+        public bool PerformClick(DexObject view) => false;
+        public void SetText(DexObject view, string? text) { }
+        public string GetText(DexObject view) => string.Empty;
+        public bool IsLaidOut(DexObject view) => true;
+        public int GetPaddingLeft(DexObject view) => 0;
+        public int GetPaddingTop(DexObject view) => 0;
+        public int GetPaddingRight(DexObject view) => 0;
+        public int GetPaddingBottom(DexObject view) => 0;
+        public DexObject ObtainStyledAttributes() => new("Landroid/content/res/TypedArray;");
+        public int TypedArrayGetIndexCount() => 0;
+        public bool TypedArrayHasValue(int index) => false;
+        public string? TypedArrayGetString(int index) => null;
+        public int TypedArrayGetColor(int index, int defaultValue) => defaultValue;
+        public DexObject? TypedArrayGetColorStateList(int index) => null;
+        public float TypedArrayGetDimension(int index, float defaultValue) => defaultValue;
+        public int TypedArrayGetInt(int index, int defaultValue) => defaultValue;
+        public int TypedArrayGetResourceId(int index, int defaultValue) => defaultValue;
+        public bool TypedArrayGetBoolean(int index, bool defaultValue) => defaultValue;
+        public float TypedArrayGetFloat(int index, float defaultValue) => defaultValue;
+        public int TypedArrayGetDimensionPixelSize(int index, int defaultValue) => defaultValue;
+        public int TypedArrayGetDimensionPixelOffset(int index, int defaultValue) => defaultValue;
+        public int TypedArrayGetIndex(int index) => 0;
+        public bool TypedArrayGetValue(int index) => false;
+        public byte[]? RenderFrame(int pixelWidth, int pixelHeight, float density) => null;
+        public int? HitTest(float pixelX, float pixelY) => null;
+        public void ToastMakeText(string? text, int duration) => MadeText = text;
+        public void ToastSetText(string? text) => MadeText = text;
+        public void ToastSetDuration(int duration) { }
+        public int ToastGetDuration() => 0;
+        public void ToastShow() => ShowCount++;
+        public void ToastCancel() => CancelCount++;
+        public bool ToastIsActive() => false;
+        public void ToastRender() { }
+        public void DispatchTouch(int action, float x, float y) { }
+        public void DispatchKey(int action, int keyCode) { }
+        public int GesturePoll() => 0;
+        public bool GestureActive => false;
     }
 
     [Fact]
@@ -612,12 +674,12 @@ public sealed class AndroidFrameworkBindingTests
     }
 
     [Fact]
-    public void Portfolio_rejects_invoke_shape_invalid_toast_arguments_and_preserves_overloads()
+    public void Portfolio_rejects_invoke_shape_invalid_toast_duration_and_preserves_overloads()
     {
         var peers = new ActivityWindowPeers();
         var activity = new DexObject("Lorg/example/Main;");
         peers.Associate(activity, new InMemoryActivityWindow());
-        var state = new AndroidFrameworkState("s", "org.example", activity.TypeDescriptor, peers, toastLimits: new AndroidToastLimits(maxTextLength: 4));
+        var state = new AndroidFrameworkState("s", "org.example", activity.TypeDescriptor, peers);
         state.AttachActivity(activity);
         var registry = AndroidApiBindings.CreateBuilder(state, new RecordingLogSink()).Build();
         var context = new AndroidApiSessionContext("s", "org.example", activity.TypeDescriptor, default, () => true);
@@ -626,7 +688,8 @@ public sealed class AndroidFrameworkBindingTests
         Assert.Throws<ArgumentException>(() => registry.Invoke(context, new AndroidApiCallSite("Lc;->m()V", 0, log, log, AndroidInvokeKind.Virtual), [activity, "t", "m"]));
         Assert.True(registry.Contains(new AndroidApiMethodId("Ljava/lang/String;", "indexOf", "(Ljava/lang/String;)I")));
         Assert.True(registry.Contains(new AndroidApiMethodId("Ljava/lang/String;", "indexOf", "(Ljava/lang/String;I)I")));
-        Assert.Throws<AndroidApiBindingException>(() => Invoke(registry, state, "Landroid/widget/Toast;", "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;", AndroidInvokeKind.Static, activity, "too long", 0));
+        // makeText relays to the view bridge: duration outside {0,1} (the AOSP
+        // LENGTH_* domain) fails; any text length is accepted (AOSP has no cap).
         Assert.Throws<AndroidApiBindingException>(() => Invoke(registry, state, "Landroid/widget/Toast;", "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;", AndroidInvokeKind.Static, activity, "ok", 2));
     }
 
@@ -673,35 +736,21 @@ public sealed class AndroidFrameworkBindingTests
     }
 
     [Fact]
-    public void Toast_quota_reserves_before_factory_and_rolls_back_factory_failures()
+    public void Toast_makeText_validates_duration_domain()
     {
         var peers = new ActivityWindowPeers();
         var activity = new DexObject("Lorg/example/Main;");
         var window = new CountingToastWindow();
         peers.Associate(activity, window);
-        var state = new AndroidFrameworkState("s", "p", activity.TypeDescriptor, peers, peerLimits: new AndroidPeerLimits(maxToasts: 1));
+        var state = new AndroidFrameworkState("s", "p", activity.TypeDescriptor, peers);
         state.AttachActivity(activity);
         var registry = AndroidApiBindings.CreateBuilder(state, new RecordingLogSink()).Build();
 
-        Invoke(registry, state, "Landroid/widget/Toast;", "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;", AndroidInvokeKind.Static, activity, "accepted", 0);
-        Assert.Throws<AndroidPeerQuotaExceededException>(() => Invoke(registry, state, "Landroid/widget/Toast;", "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;", AndroidInvokeKind.Static, activity, "rejected", 0));
-        Assert.Equal(1, window.Created);
-        Assert.Equal(0, window.Disposed);
-        state.Dispose();
-        Assert.Equal(1, window.Disposed);
-
-        var failingPeers = new ActivityWindowPeers();
-        var failingActivity = new DexObject("Lorg/example/Failing;");
-        var failingWindow = new CountingToastWindow { ThrowNextCreate = true };
-        failingPeers.Associate(failingActivity, failingWindow);
-        var failingState = new AndroidFrameworkState("f", "p", failingActivity.TypeDescriptor, failingPeers, peerLimits: new AndroidPeerLimits(maxToasts: 1));
-        failingState.AttachActivity(failingActivity);
-        var failingRegistry = AndroidApiBindings.CreateBuilder(failingState, new RecordingLogSink()).Build();
-        Assert.Throws<AndroidApiBindingException>(() => Invoke(failingRegistry, failingState, "Landroid/widget/Toast;", "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;", AndroidInvokeKind.Static, failingActivity, "fail", 0));
-        Invoke(failingRegistry, failingState, "Landroid/widget/Toast;", "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;", AndroidInvokeKind.Static, failingActivity, "retry", 0);
-        Assert.Equal(1, failingState.PeerCounts.Toasts);
-        failingState.Dispose();
-        Assert.Equal(1, failingWindow.Disposed);
+        // makeText relays to the view bridge; a duration outside {0,1} (the AOSP
+        // LENGTH_* domain) fails before the relay.
+        Assert.Throws<AndroidApiBindingException>(() => Invoke(registry, state, "Landroid/widget/Toast;", "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;", AndroidInvokeKind.Static, activity, "ok", 2));
+        // Valid SHORT duration with the unavailable bridge: no-op (headless), no throw.
+        _ = Invoke(registry, state, "Landroid/widget/Toast;", "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;", AndroidInvokeKind.Static, activity, "ok", 0);
     }
 
     private static object? Invoke(AndroidApiRegistry registry, AndroidFrameworkState state, string owner, string name, string descriptor, AndroidInvokeKind kind, params object[] args)
@@ -717,35 +766,16 @@ public sealed class AndroidFrameworkBindingTests
         public int Info(AndroidLogEntry entry) { Entries.Add(entry); return 1; }
     }
 
-    private sealed class CountingToastWindow : IActivityWindow, IAndroidToastHost
+    private sealed class CountingToastWindow : IActivityWindow
     {
         public event EventHandler? Closed;
         public nint Handle => 0;
         public string Title { get; private set; } = string.Empty;
         public bool IsClosed { get; private set; }
-        public int Created { get; private set; }
-        public int Disposed { get; private set; }
-        public bool ThrowNextCreate { get; set; }
         public void SetTitle(string? title, CancellationToken cancellationToken) => Title = title ?? string.Empty;
         public void Show(CancellationToken cancellationToken) { }
         public void Close() { if (IsClosed) return; IsClosed = true; Closed?.Invoke(this, EventArgs.Empty); }
         public void Dispose() => Close();
-        public IAndroidToastNotification CreateToast(string text, int duration, CancellationToken cancellationToken)
-        {
-            if (ThrowNextCreate) { ThrowNextCreate = false; throw new InvalidOperationException("factory failed"); }
-            Created++;
-            return new CountingToast(this, text, duration);
-        }
-        private sealed class CountingToast(CountingToastWindow owner, string text, int duration) : IAndroidToastNotification
-        {
-            private int _disposed;
-            public bool IsVisible { get; private set; }
-            public int Duration { get; set; } = duration;
-            public string Text { get; set; } = text;
-            public void Show(CancellationToken cancellationToken) => IsVisible = true;
-            public void Cancel() => IsVisible = false;
-            public void Dispose() { if (Interlocked.Exchange(ref _disposed, 1) == 0) owner.Disposed++; }
-        }
     }
     private sealed class FixedClock : IAndroidClock
     {

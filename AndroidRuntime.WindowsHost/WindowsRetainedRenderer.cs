@@ -99,7 +99,6 @@ internal sealed partial class WindowsRetainedRenderer : IDisposable
     private float _density = 1;
     private long _renderedRevision;
     private long _stale;
-    private string? _toast;
     private bool _disposed;
 
     internal long RenderedRevision { get { lock (_gate) return _renderedRevision; } }
@@ -122,8 +121,6 @@ internal sealed partial class WindowsRetainedRenderer : IDisposable
             _renderedRevision = frame.Revision;
         }
     }
-
-    internal void SetToast(string? text) { lock (_gate) { ObjectDisposedException.ThrowIf(_disposed, this); _toast = text; } }
 
     internal WindowsFrameCapture Capture()
     {
@@ -150,7 +147,7 @@ internal sealed partial class WindowsRetainedRenderer : IDisposable
         return bgra.Length == expected ? bgra : new byte[expected];
     }
 
-    public void Dispose() { lock (_gate) { _disposed = true; _frame = null; _toast = null; } }
+    public void Dispose() { lock (_gate) { _disposed = true; _frame = null; } }
 
     [StructLayout(LayoutKind.Sequential)] private struct BitmapInfoHeader
     {

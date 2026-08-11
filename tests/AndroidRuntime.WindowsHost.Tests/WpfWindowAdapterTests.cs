@@ -23,7 +23,7 @@ public sealed class WpfWindowAdapterTests
     public void Factory_dispose_timeout_can_be_retried_without_orphaning_dispatcher()
     {
         var entered = new ManualResetEventSlim(); var release = new ManualResetEventSlim();
-        var factory = new WpfActivityWindowFactory(null, TimeSpan.FromMilliseconds(50));
+        var factory = new WpfActivityWindowFactory(TimeSpan.FromMilliseconds(50));
         factory.BlockDispatcherForTest(entered, release); Assert.True(entered.Wait(TimeSpan.FromSeconds(2)));
         Assert.Throws<TimeoutException>(factory.Dispose); Assert.True(factory.IsDispatcherThreadAlive);
         release.Set(); factory.Dispose(); factory.Dispose(); Assert.False(factory.IsDispatcherThreadAlive);
@@ -225,34 +225,35 @@ public sealed class WpfWindowAdapterTests
     [Fact]
     public async Task Real_hwnd_accepts_worker_title_change_and_dispatcher_stops_after_close()
     {
-        using var factory = new WpfActivityWindowFactory(new AndroidToastLimits(queueCapacity: 2, maxShowsPerMinute: 2));
+        using var factory = new WpfActivityWindowFactory();
         using var window = factory.Create("test", "org.example", "Lexample/Main;", CancellationToken.None);
 
         Assert.NotEqual(nint.Zero, window.Handle);
         await Task.Run(() => window.SetTitle("Worker title", CancellationToken.None));
         Assert.Equal("Worker title", window.Title);
 
-        var toastHost = Assert.IsAssignableFrom<IAndroidToastHost>(window);
-        using var toast = toastHost.CreateToast("first", 0, default);
-        using var queuedToast = toastHost.CreateToast("second", 0, default);
-        using var droppedToast = toastHost.CreateToast("third", 0, default);
-        await Task.Run(() => toast.Show(default));
-        await Task.Run(() => queuedToast.Show(default));
-        Assert.True(toast.IsVisible);
-        Assert.True(Assert.IsType<WpfActivityWindow>(window).IsToastVisible);
-        await Task.Run(toast.Cancel);
-        Assert.False(toast.IsVisible);
-        Assert.True(queuedToast.IsVisible);
-        Assert.Equal("second", Assert.IsType<WpfActivityWindow>(window).ToastText);
-        await Task.Run(() => droppedToast.Show(default));
-        Assert.Equal(1, Assert.IsType<WpfActivityWindow>(window).DroppedToastCount);
-        queuedToast.Cancel();
-        Assert.False(Assert.IsType<WpfActivityWindow>(window).IsToastVisible);
-
         window.Close();
         window.Close();
         factory.Dispose();
         Assert.False(factory.IsDispatcherThreadAlive);
+    }
+
+    [Fact]
+    public void Real_activity_surface_is_input_hit_testable()
+    {
+        using var factory = new WpfActivityWindowFactory();
+        using var window = Assert.IsType<WpfActivityWindow>(
+            factory.Create("test", "org.example", "Lexample/Main;", CancellationToken.None));
+
+        window.Show(CancellationToken.None);
+        nint surface = window.SurfaceHandle;
+        Assert.NotEqual(nint.Zero, surface);
+        Assert.NotEqual(0, GetWindowLong(surface, GwlStyle) & SsNotify);
+        Assert.True(GetWindowRect(surface, out NativeRect rect));
+
+        int x = rect.Left + ((rect.Right - rect.Left) / 2);
+        int y = rect.Top + ((rect.Bottom - rect.Top) / 2);
+        Assert.Equal((nint)HtClient, SendMessage(surface, WmNcHitTest, nint.Zero, MakeLParam(x, y)));
     }
 
 
@@ -288,6 +289,29 @@ public sealed class WpfWindowAdapterTests
 
     [DllImport("user32.dll")]
     private static extern nint SendMessage(nint hwnd, int message, nint wParam, nint lParam);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW", SetLastError = true)]
+    private static extern int GetWindowLong(nint hwnd, int index);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(nint hwnd, out NativeRect rect);
+
+    private static nint MakeLParam(int low, int high) => (nint)((high << 16) | (low & 0xFFFF));
+
+    private const int GwlStyle = -16;
+    private const int SsNotify = 0x0100;
+    private const int WmNcHitTest = 0x0084;
+    private const int HtClient = 1;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        internal int Left;
+        internal int Top;
+        internal int Right;
+        internal int Bottom;
+    }
 
 }
 

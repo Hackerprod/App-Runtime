@@ -35,6 +35,8 @@ add_library(viewruntime_core SHARED
     src/android/viewruntime_backend.cpp
     src/android/android_grid_layout.cpp
     src/android/android_display_list.cpp
+    src/android/android_toast.cpp
+    src/android/android_input.cpp
     src/rendering/display_list_commands.cpp
     src/rendering/transform_matrix.cpp
     src/rendering/render_plan.cpp
